@@ -1,3 +1,11 @@
+## Robot movement: Raspberry Pi Pico W over Bluetooth
+
+The computer keeps the microphone, speaker, vision, and conversation services.
+Eye/head movement commands use BLE to the Pico W. See the
+[Pico W setup and wiring guide](firmware/robot_controller_pico_w/README.md).
+After flashing the firmware and installing requirements, run `python test_pico.py`
+or `python test_full.py --transport bluetooth`.
+
 # Robot voice conversation
 
 The conversation demo currently uses `DefaultBrain`, which replies “Got it! Tell me more.” without an xAI key or API call. ElevenLabs is still required for speech and transcription. To restore Grok, uncomment its import and `brain = GrokClient(settings)` in `test_conversation.py`, and configure `XAI_API_KEY` in `.env`. The Grok-specific setup below applies when you re-enable it.

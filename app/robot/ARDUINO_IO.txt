@@ -1,3 +1,10 @@
+CURRENT HARDWARE: Raspberry Pi Pico W over Bluetooth Low Energy.
+Use firmware/robot_controller_pico_w/main.py and its README.md for setup,
+wiring, protocol, and calibration. Audio remains on the computer.
+Run python test_pico.py or python -m app.robot.calibrate --transport bluetooth.
+
+The following is the legacy Arduino/ESP32 reference, retained for older boards.
+
 ================================================================================
 ROBOT CONTROL LAYER — scripts, Python outputs, and Arduino wire commands
 ================================================================================
@@ -134,18 +141,17 @@ never opens a serial port).
 --------------------------------------------------------------------------------
 4) TRANSPORTS — what actually hits the wire
 --------------------------------------------------------------------------------
-  MockTransport (app/robot/transport/mock.py)
-    - Does not talk to hardware
-    - Records lines in .lines and raw bytes in .raw
-    - Example raw: b"LOOK,0.7200,0.4100\\n"
+  WifiTransport (app/robot/transport/wifi.py)  *** preferred ***
+    - TCP client to ESP32 Wi-Fi chip (same ASCII lines + "\\n")
+    - Env: ROBOT_TRANSPORT=wifi|auto  ROBOT_WIFI_HOST=192.168.x.x  ROBOT_WIFI_PORT=9000
+    - Firmware: firmware/robot_controller_esp32/ (servos + TCP server)
 
   SerialTransport (app/robot/transport/serial_transport.py)
-    - Writes the same bytes to USB serial (pyserial)
-    - Port from --port / ROBOT_SERIAL_PORT, baud default 115200
+    - USB serial fallback (pyserial)
+    - Env: ROBOT_SERIAL_PORT  ROBOT_SERIAL_BAUD
 
-  WifiTransport (app/robot/transport/wifi.py)
-    - Placeholder only; open()/send_line() raise NotImplementedError
-    - Same command strings would be used later over TCP/UDP
+  MockTransport (app/robot/transport/mock.py)
+    - Does not talk to hardware; records lines in .lines / .raw
 
 
 --------------------------------------------------------------------------------

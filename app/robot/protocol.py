@@ -1,4 +1,4 @@
-"""Line-oriented command protocol between host Python and Arduino firmware.
+"""Line-oriented command protocol between host Python and robot firmware.
 
 Commands are ASCII, comma-separated, terminated by newline when sent on the wire.
 Unknown commands should be ignored by the firmware (optionally reply ERR).
@@ -79,7 +79,7 @@ def parse_command(line: str) -> Command:
 
 
 def format_wire(command: str) -> bytes:
-    """Terminate a command for serial/Wi-Fi framing."""
+    """Terminate a command for serial/Wi-Fi/BLE framing."""
     return (command.rstrip("\r\n") + "\n").encode("ascii", errors="strict")
 
 

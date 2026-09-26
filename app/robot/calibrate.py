@@ -4,11 +4,11 @@ from __future__ import annotations
 import argparse
 import sys
 
-from .config import RobotHardwareConfig, ServoAxisConfig
+from .config import ServoAxisConfig
 from .controller import RobotController
+from .factory import connect_robot
 from .mapping import norm_to_angle
 from .transport.mock import MockTransport
-from .transport.serial_transport import SerialTransport
 
 
 HELP = """\
@@ -111,29 +111,30 @@ def run_repl(robot: RobotController) -> int:
 
 
 def build_robot(args: argparse.Namespace) -> RobotController:
-    cfg = RobotHardwareConfig.from_env()
-    if args.port:
-        cfg = cfg.with_updates(serial_port=args.port)
-    if args.baud:
-        cfg = cfg.with_updates(serial_baud=args.baud)
-    if args.mock or not cfg.serial_port:
-        if not args.mock and not cfg.serial_port:
-            print("No serial port configured; using MockTransport. "
-                  "Pass --port or set ROBOT_SERIAL_PORT.", file=sys.stderr)
-        return RobotController(MockTransport(), cfg)
-    return RobotController(
-        SerialTransport(cfg.serial_port, cfg.serial_baud, cfg.serial_timeout),
-        cfg,
+    return connect_robot(
+        mock=args.mock,
+        transport=args.transport or None,
+        bluetooth_name=args.bluetooth_name or None,
+        bluetooth_address=args.bluetooth_address or None,
+        wifi_host=args.wifi_host or None,
+        wifi_port=args.wifi_port or None,
+        serial_port=args.port or None,
     )
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Calibrate / test robot servos")
     parser.add_argument("--mock", action="store_true", help="use MockTransport (no hardware)")
-    parser.add_argument("--port", default="", help="USB serial device path")
+    parser.add_argument("--transport", choices=("auto", "bluetooth", "wifi", "serial", "mock"), default="")
+    parser.add_argument("--bluetooth-name", default="", help="BLE name (default PicoRobot)")
+    parser.add_argument("--bluetooth-address", default="", help="BLE address or macOS device UUID")
+    parser.add_argument("--wifi-host", default="", help="ESP32 IP address")
+    parser.add_argument("--wifi-port", type=int, default=0, help="TCP port (default 9000)")
+    parser.add_argument("--port", default="", help="USB serial device path (fallback)")
     parser.add_argument("--baud", type=int, default=0, help="serial baud (default 115200)")
     args = parser.parse_args(argv)
     robot = build_robot(args)
+    print(f"Using transport: {type(robot.transport).__name__}")
     try:
         return run_repl(robot)
     finally:

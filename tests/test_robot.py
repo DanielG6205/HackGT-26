@@ -120,7 +120,7 @@ class ControllerTests(unittest.TestCase):
         robot.look_at_user()  # uses cached face
         self.assertTrue(transport.last.startswith("LOOK,0.3000,0.4000"))
 
-    def test_head_coupling_and_wifi_placeholder(self):
+    def test_head_coupling_and_wifi_tcp(self):
         cfg = RobotHardwareConfig(
             head_x=ServoAxisConfig(pin=5, enabled=True),
             head_y=ServoAxisConfig(pin=6, enabled=True),
@@ -133,9 +133,33 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(transport.last, "LOOK,0.7000,0.3000,0.7000,0.3000")
         self.assertIsNotNone(robot.state.head_x_deg)
 
-        wifi = WifiTransport("192.168.1.50", 9000)
-        with self.assertRaises(NotImplementedError):
-            wifi.open()
+        # Local TCP echo-ish acceptor for WifiTransport.
+        import socket
+        import threading
+
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        host, port = server.getsockname()
+        received = []
+
+        def accept_once():
+            conn, _ = server.accept()
+            with conn:
+                data = conn.recv(256)
+                received.append(data)
+
+        worker = threading.Thread(target=accept_once, daemon=True)
+        worker.start()
+        wifi = WifiTransport(host, port, timeout=1.0, connect_retries=3, retry_delay=0.05)
+        wifi.open()
+        wifi.send_line("PING")
+        worker.join(2)
+        wifi.close()
+        server.close()
+        self.assertTrue(received)
+        self.assertEqual(received[0], b"PING\n")
 
     def test_nudge_and_set_servo(self):
         transport = MockTransport()

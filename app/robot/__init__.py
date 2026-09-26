@@ -1,9 +1,11 @@
 """Robot motion / control package."""
 from .config import RobotHardwareConfig, ServoAxisConfig
 from .controller import LookState, RobotController
-from .transport import MockTransport, SerialTransport, Transport, WifiTransport
+from .factory import connect_robot
+from .transport import BluetoothTransport, MockTransport, SerialTransport, Transport, WifiTransport
 
 __all__ = [
+    "BluetoothTransport",
     "LookState",
     "MockTransport",
     "RobotController",
@@ -12,4 +14,5 @@ __all__ = [
     "ServoAxisConfig",
     "Transport",
     "WifiTransport",
+    "connect_robot",
 ]

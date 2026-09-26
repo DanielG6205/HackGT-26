@@ -24,6 +24,7 @@ from .protocol import (
 from .transport.base import Transport
 from .transport.mock import MockTransport
 from .transport.serial_transport import SerialTransport
+from .transport.wifi import WifiTransport
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,43 @@ class RobotController:
         return cls(MockTransport(), config)
 
     @classmethod
+    def bluetooth(
+        cls,
+        name: str | None = None,
+        address: str | None = None,
+        config: RobotHardwareConfig | None = None,
+        **kwargs,
+    ) -> RobotController:
+        from .transport.bluetooth import BluetoothTransport
+        cfg = config or RobotHardwareConfig.from_env()
+        cfg = cfg.with_updates(
+            transport="bluetooth",
+            bluetooth_name=cfg.bluetooth_name if name is None else name,
+            bluetooth_address=cfg.bluetooth_address if address is None else address,
+        )
+        return cls(BluetoothTransport(cfg.bluetooth_name, cfg.bluetooth_address,
+                                      cfg.bluetooth_timeout), cfg, **kwargs)
+
+    @classmethod
+    def wifi(
+        cls,
+        host: str | None = None,
+        port: int | None = None,
+        config: RobotHardwareConfig | None = None,
+        **kwargs,
+    ) -> RobotController:
+        cfg = config or RobotHardwareConfig.from_env()
+        wifi_host = host or cfg.wifi_host
+        wifi_port = cfg.wifi_port if port is None else port
+        if not wifi_host:
+            raise ValueError("Set ROBOT_WIFI_HOST or pass host= to RobotController.wifi()")
+        return cls(
+            WifiTransport(wifi_host, wifi_port, cfg.wifi_timeout),
+            cfg.with_updates(wifi_host=wifi_host, wifi_port=wifi_port, transport="wifi"),
+            **kwargs,
+        )
+
+    @classmethod
     def serial(
         cls,
         port: str | None = None,
@@ -89,9 +127,15 @@ class RobotController:
             raise ValueError("Set ROBOT_SERIAL_PORT or pass port= to RobotController.serial()")
         return cls(
             SerialTransport(device, cfg.serial_baud, cfg.serial_timeout),
-            cfg,
+            cfg.with_updates(serial_port=device, transport="serial"),
             **kwargs,
         )
+
+    @classmethod
+    def from_env(cls, **kwargs) -> RobotController:
+        """Connect using ROBOT_TRANSPORT / ROBOT_BLUETOOTH_* / legacy link settings from .env."""
+        from .factory import connect_robot
+        return connect_robot(**kwargs)
 
     def open(self) -> None:
         if not self._opened:

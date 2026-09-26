@@ -17,12 +17,23 @@ class ConversationState(Enum):
 
 
 class ConversationManager:
-    def __init__(self, speech, listener, brain):
+    def __init__(self, speech, listener, brain, sensor_provider=None):
         self.speech, self.listener, self.brain = speech, listener, brain
+        # Optional callable returning dict | None for the current vision/sensors.
+        self.sensor_provider = sensor_provider
         self.state = ConversationState.IDLE
         self._stop = threading.Event()
         self._running = threading.Lock()
         self._thread = None
+
+    def _sensor_context(self):
+        if self.sensor_provider is None:
+            return None
+        try:
+            return self.sensor_provider()
+        except Exception as exc:  # noqa: BLE001 — never break talk on sensor glitches
+            log.error("[ERROR] sensor_provider failed: %s", type(exc).__name__)
+            return None
 
     def _state(self, state):
         self.state = state
@@ -80,7 +91,7 @@ class ConversationManager:
                         break
                     self._state(ConversationState.THINKING)
                     log.info("[BRAIN] Preparing reply...")
-                    response = self.brain.respond(text)
+                    response = self.brain.respond(text, sensor_context=self._sensor_context())
                     if not self._stop.is_set():
                         self._speak(response)
                 except ServiceError as exc:

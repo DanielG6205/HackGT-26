@@ -29,7 +29,7 @@ class VoiceTests(unittest.TestCase):
         manager.start("Hello")
         self.assertEqual([e[0] for e in events], ["speak", "listen", "speak", "listen", "speak"])
         brain.remember_assistant.assert_called_once_with("Hello")
-        brain.respond.assert_called_once_with("My name is Daniel")
+        brain.respond.assert_called_once_with("My name is Daniel", sensor_context=None)
         self.assertEqual(manager.state, ConversationState.IDLE)
 
     def test_background_stop_and_duplicate_start(self):
