@@ -1,77 +1,90 @@
-"""Deterministic trials without a camera, models, or external services."""
+"""Deterministic object attention trials without models or a webcam."""
 import unittest
-
-from app.vision.interaction import DIRECTIONS, GazeInteraction, InteractionState
-from app.vision.models import Gaze
+from app.vision.interaction import GazeInteraction, InteractionState, OBJECT_PROMPTS
+from app.vision.models import Gaze, TrackedObject
 
 
 def gaze(x=0, y=0):
-    return Gaze(looking_at_camera=abs(x) < 0.65 and abs(y) < 0.65,
+    return Gaze(looking_at_camera=abs(x) < .65 and abs(y) < .65,
                 horizontal_score=x, vertical_score=y)
+
+
+def obj(identity=4, label='bottle', x=.8, y=.2, confidence=.9):
+    return TrackedObject(identity, label, confidence, (0, 0, 10, 10), (5, 5), (x, y))
 
 
 class InteractionTests(unittest.TestCase):
     def make(self, **kwargs):
         messages = []
-        trial = GazeInteraction(emit=messages.append, choose_target=lambda: 'NE', **kwargs)
+        trial = GazeInteraction(emit=messages.append, **kwargs)
         return trial, messages
 
-    def test_compass_thresholds_and_unknown(self):
-        trial, _ = self.make(horizontal_threshold=0.8, vertical_threshold=0.9)
-        for direction, (x, y) in zip(DIRECTIONS, [(0, -1), (1, -1), (1, 0),
-                                                 (1, 1), (0, 1), (-1, 1),
-                                                 (-1, 0), (-1, -1)]):
-            self.assertEqual(trial.direction_of(gaze(x, y)), direction)
-        self.assertEqual(trial.direction_of(gaze(0.8, 0.9)), 'CENTER')
+    def test_streak_and_repeat(self):
+        trial, messages = self.make(hold_frames=2, delay=.1)
+        objects = (obj(),)
+        trial.update(gaze(), 0, objects)
+        trial.update(None, .1, objects)
+        trial.update(gaze(), .2, objects)
+        self.assertIs(trial.state, InteractionState.WAIT_FOR_EYE_CONTACT)
+        trial.update(gaze(), .3, objects)
+        self.assertTrue(any('[ROBOT] ' + text.format(label='bottle') in messages
+                            for text in OBJECT_PROMPTS))
+        self.assertIs(trial.state, InteractionState.WAIT_FOR_GAZE)
+        trial.update(gaze(1, -1), .4, objects)
+        trial.update(gaze(-1, 0), .5, objects)
+        trial.update(gaze(1, -1), .6, objects)
+        self.assertIs(trial.state, InteractionState.WAIT_FOR_GAZE)
+        trial.update(gaze(1, -1), .7, objects)
+        self.assertIn('[SUCCESS] User followed gaze toward bottle #4.', messages)
+        self.assertEqual(messages.count('[ROBOT] Hurray!'), 1)
+        trial.update(None, .9)
+        self.assertIs(trial.state, InteractionState.WAIT_FOR_EYE_CONTACT)
+        self.assertIsNone(trial.target_object)
+
+    def test_no_candidates_then_select_highest_confidence(self):
+        trial, _ = self.make(hold_frames=1)
+        trial.update(gaze(), 0, (obj(label='person'), obj(x=.5, y=.5), obj(identity=None)))
+        self.assertIs(trial.state, InteractionState.SELECT_OBJECT)
+        trial.update(gaze(), .1, (obj(confidence=.7), obj(identity=5, label='cup')))
+        self.assertEqual(trial.target_object.track_id, 5)
+
+    def test_lost_target_does_not_switch_or_succeed(self):
+        trial, messages = self.make(hold_frames=2)
+        trial.update(gaze(), 0, (obj(),))
+        trial.update(gaze(), .1, (obj(),))
+        trial.update(gaze(1, -1), .2, (obj(),))
+        trial.update(gaze(1, -1), .3, (obj(identity=8),))
+        trial.update(gaze(1, -1), .4, (obj(),))
+        self.assertIs(trial.state, InteractionState.WAIT_FOR_GAZE)
+        self.assertEqual(trial.target_object.track_id, 4)
+        trial.update(None, 5.1)
+        self.assertIn('[TIMEOUT] User did not follow bottle #4.', messages)
+
+    def test_moving_target_and_center_rejection(self):
+        trial, _ = self.make(hold_frames=1)
+        trial.update(gaze(), 0, (obj(),))
+        trial.update(gaze(), .1, (obj(x=.5, y=.5),))
+        self.assertIs(trial.state, InteractionState.WAIT_FOR_GAZE)
+        trial.update(gaze(1, -1), .2, (obj(x=.2, y=.8),))
+        self.assertEqual(trial.target_direction, 'SW')
+        self.assertIs(trial.state, InteractionState.WAIT_FOR_GAZE)
+        trial.update(gaze(-1, 1), .3, (obj(x=.2, y=.8),))
+        self.assertIs(trial.state, InteractionState.COOLDOWN)
+
+    def test_thresholds_invalid_gaze_and_time(self):
+        trial, messages = self.make(horizontal_threshold=.8, vertical_threshold=.9)
+        self.assertEqual(trial.direction_of(gaze(.8, .9)), 'CENTER')
+        self.assertEqual(trial.direction_of(gaze(1, -1)), 'NE')
         for invalid in (None, Gaze(), gaze(float('nan'), 0)):
             self.assertEqual(trial.direction_of(invalid), 'UNKNOWN')
-
-    def test_streaks_success_and_next_trial(self):
-        trial, messages = self.make(hold_frames=3, delay=0.2)
-        for t, sample in [(0, gaze()), (0.1, gaze()), (0.2, None),
-                          (0.3, gaze()), (0.4, gaze())]:
-            trial.update(sample, t)
-        self.assertIs(trial.state, InteractionState.LOOK_AT_ROBOT)
-        trial.update(gaze(), 0.5)
-        self.assertIs(trial.state, InteractionState.WAIT_FOR_GAZE_FOLLOW)
-        self.assertEqual(trial.target_direction, 'NE')
-        for t, sample in [(0.6, gaze(1, -1)), (0.7, gaze(-1, 0)),
-                          (0.8, gaze(1, -1)), (0.9, gaze(1, -1))]:
-            trial.update(sample, t)
-        self.assertIs(trial.state, InteractionState.WAIT_FOR_GAZE_FOLLOW)
-        trial.update(gaze(1, -1), 1.0)
-        self.assertIs(trial.state, InteractionState.COOLDOWN)
-        self.assertIsNone(trial.target_direction)
-        trial.update(gaze(), 1.1)
-        self.assertIs(trial.state, InteractionState.COOLDOWN)
-        trial.update(gaze(), 1.3)
-        self.assertIs(trial.state, InteractionState.LOOK_AT_ROBOT)
-        self.assertEqual(messages.count('[SUCCESS] User made eye contact.'), 1)
-        self.assertIn('[SUCCESS] User followed gaze toward NE.', messages)
-        self.assertEqual(messages.count('[ROBOT] Look at me!'), 2)
-
-    def test_timeout_even_without_face_and_no_late_success(self):
-        for last_gaze in (None, gaze(1, -1)):
-            trial, messages = self.make(hold_frames=1)
-            trial.update(gaze(), 0)
-            trial.update(last_gaze, 5)
-            self.assertIs(trial.state, InteractionState.COOLDOWN)
-            self.assertIn('[TIMEOUT] User did not follow target.', messages)
-            self.assertNotIn('[SUCCESS] User followed gaze toward NE.', messages)
-
-    def test_logging_only_changes_and_capture_gap_resets_streak(self):
-        trial, messages = self.make(hold_frames=3)
         trial.update(gaze(), 0)
-        trial.update(gaze(), 0.1)
+        trial.update(gaze(), .1)
         trial.update(gaze(), 1)
-        self.assertIs(trial.state, InteractionState.LOOK_AT_ROBOT)
+        self.assertEqual(trial._streak, 1)
         self.assertEqual(messages.count('[GAZE] CENTER'), 1)
         with self.assertRaises(ValueError):
             trial.update(gaze(), 1)
-
-    def test_invalid_configuration(self):
-        for options in ({'hold_frames': 0}, {'timeout': -1}, {'delay': -1},
-                        {'horizontal_threshold': 0}, {'vertical_threshold': float('nan')}):
+        for options in ({'object_margin': .5}, {'hold_frames': 0}, {'timeout': -1}):
             with self.assertRaises(ValueError):
                 self.make(**options)
 

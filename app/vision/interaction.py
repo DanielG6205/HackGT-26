@@ -6,11 +6,25 @@ import random
 from .models import Gaze
 
 DIRECTIONS = ('N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW')
+EYE_CONTACT_PROMPTS = (
+    'Can you look at me?',
+    'Could you look this way for a moment?',
+    'Ready to play? Can you look at me?',
+    'Can I have your attention for a moment?',
+)
+OBJECT_PROMPTS = (
+    'Can you look at the {label}?',
+    "Let's find the {label}! Can you look over there?",
+    'Could you take a look at the {label}?',
+    'Now, can you find the {label}?',
+)
 
 
 class InteractionState(Enum):
-    LOOK_AT_ROBOT = auto()
-    WAIT_FOR_GAZE_FOLLOW = auto()
+    WAIT_FOR_EYE_CONTACT = auto()
+    SELECT_OBJECT = auto()
+    PROMPT_USER = auto()
+    WAIT_FOR_GAZE = auto()
     COOLDOWN = auto()
 
 
@@ -24,7 +38,7 @@ class GazeInteraction:
 
     def __init__(self, *, horizontal_threshold=0.65, vertical_threshold=0.65,
                  hold_frames=5, timeout=5.0, delay=1.0, emit=print,
-                 choose_target=None):
+                 object_margin=0.1):
         for name, value in (('horizontal_threshold', horizontal_threshold),
                             ('vertical_threshold', vertical_threshold),
                             ('timeout', timeout)):
@@ -34,22 +48,26 @@ class GazeInteraction:
             raise ValueError('delay must be finite and nonnegative')
         if not isinstance(hold_frames, int) or hold_frames < 1:
             raise ValueError('hold_frames must be a positive integer')
+        if not math.isfinite(object_margin) or not 0 < object_margin < 0.5:
+            raise ValueError("object_margin must be between 0 and 0.5")
+        self.object_margin = object_margin
+        self.target_object = None
         self.horizontal_threshold = horizontal_threshold
         self.vertical_threshold = vertical_threshold
         self.hold_frames = hold_frames
         self.timeout = timeout
         self.delay = delay
         self.emit = emit
-        # Replace this callback later with direction_of_detected_object.
-        self.choose_target = choose_target or (lambda: random.choice(DIRECTIONS))
+        self._last_prompts = {}
         self.target_direction = None
         self.direction = 'UNKNOWN'
-        self.state = InteractionState.LOOK_AT_ROBOT
+        self.state = InteractionState.WAIT_FOR_EYE_CONTACT
         self._streak = 0
         self._deadline = None
         self._last_time = None
+        self._prompt_pending = False
         self._reported_direction = None
-        self._enter(InteractionState.LOOK_AT_ROBOT)
+        self._enter(InteractionState.WAIT_FOR_EYE_CONTACT)
 
     def direction_of(self, gaze: Gaze | None):
         if gaze is None or gaze.looking_at_camera is None:
@@ -61,52 +79,100 @@ class GazeInteraction:
         vertical = 'N' if y < -self.vertical_threshold else 'S' if y > self.vertical_threshold else ''
         return vertical + horizontal or 'CENTER'
 
+    def _say_varied(self, kind, options, **values):
+        previous = self._last_prompts.get(kind)
+        template = random.choice([text for text in options if text != previous])
+        self._last_prompts[kind] = template
+        self.emit('[ROBOT] ' + template.format(**values))
+
     def _enter(self, state):
         self.state = state
         self._streak = 0
         self._reported_direction = None
         self.emit(f'[STATE] {state.name}')
-        if state is InteractionState.LOOK_AT_ROBOT:
+        if state is InteractionState.WAIT_FOR_EYE_CONTACT:
             self.target_direction = None
-            self.emit('[ROBOT] Look at me!')
+            self._say_varied('eye_contact', EYE_CONTACT_PROMPTS)
 
     def _finish(self, now):
         self.target_direction = None
+        self.target_object = None
         self._deadline = now + self.delay
         self._enter(InteractionState.COOLDOWN)
 
-    def update(self, gaze: Gaze | None, now: float):
+    def object_direction(self, obj):
+        """Coarse image sectors, not a calibrated fixation or 3D gaze test."""
+        x, y = obj.center_normalized
+        margin = self.object_margin
+        horizontal = 'W' if x < 0.5 - margin else 'E' if x > 0.5 + margin else ''
+        vertical = 'N' if y < 0.5 - margin else 'S' if y > 0.5 + margin else ''
+        return vertical + horizontal or 'CENTER'
+
+    def update(self, gaze: Gaze | None, now: float, objects=(), *, prompt_pending=False):
         if not math.isfinite(now) or (self._last_time is not None and now <= self._last_time):
             raise ValueError('Frame times must be finite and strictly increasing')
         if self._last_time is not None and now - self._last_time > 0.5:
-            self._streak = 0  # Paused capture cannot complete a consecutive streak.
+            self._streak = 0
         self._last_time = now
         self.direction = self.direction_of(gaze)
+        if prompt_pending:
+            self._prompt_pending = True
+            self._streak = 0
+            return
+        if self._prompt_pending:
+            self._prompt_pending = False
+            self._streak = 0
+            if self.state is InteractionState.WAIT_FOR_GAZE:
+                self._deadline = now + self.timeout
+            elif self.state is InteractionState.COOLDOWN:
+                self._deadline = now + self.delay
+            return  # Start counting on a fresh frame after playback completes.
         if self.state is InteractionState.COOLDOWN:
             if now >= self._deadline:
-                self._enter(InteractionState.LOOK_AT_ROBOT)
-            return  # Count only frames captured after the new prompt.
+                self._enter(InteractionState.WAIT_FOR_EYE_CONTACT)
+            return
         if self.direction != self._reported_direction:
             self.emit(f'[GAZE] {self.direction}')
             self._reported_direction = self.direction
-        if self.state is InteractionState.WAIT_FOR_GAZE_FOLLOW and now >= self._deadline:
-            self.emit('[TIMEOUT] User did not follow target.')
-            self._finish(now)
-            return
-        expected = 'CENTER' if self.state is InteractionState.LOOK_AT_ROBOT else self.target_direction
-        self._streak = self._streak + 1 if self.direction == expected else 0
-        if self._streak < self.hold_frames:
-            return
-        if self.state is InteractionState.LOOK_AT_ROBOT:
-            target = self.choose_target()
-            if target not in DIRECTIONS:
-                raise ValueError('Target must be one of N, NE, E, SE, S, SW, W, NW')
+        if self.state is InteractionState.WAIT_FOR_EYE_CONTACT:
+            self._streak = self._streak + 1 if self.direction == 'CENTER' else 0
+            if self._streak < self.hold_frames:
+                return
             self.emit('[SUCCESS] User made eye contact.')
-            self.target_direction = target
+            self._enter(InteractionState.SELECT_OBJECT)
+            self.emit('[INFO] Waiting for a tracked non-person object outside CENTER.')
+        if self.state is InteractionState.SELECT_OBJECT:
+            # Center objects cannot be distinguished from continued eye contact.
+            candidates = [o for o in objects if o.track_id is not None
+                          and o.label != 'person' and self.object_direction(o) != 'CENTER']
+            if not candidates:
+                return
+            self.target_object = max(candidates, key=lambda o: o.confidence)
+            self.target_direction = self.object_direction(self.target_object)
+            self._enter(InteractionState.PROMPT_USER)
+            self._say_varied('object', OBJECT_PROMPTS, label=self.target_object.label)
+            self.emit(f'[TARGET] {self.target_object.label} #{self.target_object.track_id} '
+                      f'{self.target_direction}')
             self._deadline = now + self.timeout
-            self._enter(InteractionState.WAIT_FOR_GAZE_FOLLOW)
-            self.emit('[ROBOT] Hey, look over there!')
-            self.emit(f'[TARGET] {target}')
-        else:
-            self.emit(f'[SUCCESS] User followed gaze toward {self.target_direction}.')
-            self._finish(now)
+            self._enter(InteractionState.WAIT_FOR_GAZE)
+            return
+        if self.state is InteractionState.WAIT_FOR_GAZE:
+            target = self.target_object
+            if now >= self._deadline:
+                self.emit(f'[TIMEOUT] User did not follow {target.label} #{target.track_id}.')
+                self._finish(now)
+                return
+            current = next((o for o in objects if o.track_id == target.track_id
+                            and o.label == target.label), None)
+            direction = self.object_direction(current) if current else None
+            if direction != self.target_direction:
+                self._streak = 0
+                self.target_direction = direction
+                self.emit(f'[TARGET] {target.label} #{target.track_id} {direction or "LOST"}')
+            # A lost target cannot succeed, nor can one that moves into CENTER.
+            matches = direction in DIRECTIONS and self.direction == direction
+            self._streak = self._streak + 1 if matches else 0
+            if self._streak >= self.hold_frames:
+                self.emit(f'[SUCCESS] User followed gaze toward {target.label} #{target.track_id}.')
+                self.emit('[ROBOT] Hurray!')
+                self._finish(now)
