@@ -1,0 +1,209 @@
+================================================================================
+ROBOT CONTROL LAYER — scripts, Python outputs, and Arduino wire commands
+================================================================================
+Everything sent to the Arduino is one ASCII line ending with "\n".
+USB Serial (or Mock) just writes those bytes. Wi-Fi transport is a stub.
+
+Wire framing:  <COMMAND>[,arg...]\\n
+Example bytes:  LOOK,0.7200,0.4100\\n
+
+
+--------------------------------------------------------------------------------
+1) PROTOCOL COMMANDS THE ARDUINO ACCEPTS
+--------------------------------------------------------------------------------
+(File: app/robot/protocol.py  |  parsed by firmware/robot_controller/robot_controller.ino)
+
+  Host → Arduino                          Arduino does
+  ------------------------------------    ------------------------------------
+  LOOK,<x>,<y>                            Map normalized look to eye servos,
+                                          then smooth-step toward those angles.
+                                          x,y are 0.0–1.0 (camera image:
+                                          0=left/top, 0.5=center, 1=right/bottom)
+
+  LOOK,<x>,<y>,<hx>,<hy>                  Same for eyes, also set head axes
+                                          (only if head pins are enabled)
+
+  CENTER                                  Eyes (and head if enabled) → center
+
+  EXPR,<name>                             Stored/placeholder (no servo move yet)
+                                          e.g. EXPR,neutral  EXPR,happy
+
+  MOVE,LEFT | RIGHT | UP | DOWN | CENTER  Nudge look by firmware MOVE_STEP_NORM
+                                          (default 0.15) or center
+
+  SET,<axis>,<angle>                      Direct servo angle (degrees), clamped
+                                          axis = eye_x | eye_y | head_x | head_y
+                                          e.g. SET,eye_x,95.00
+
+  PING                                    Reply: PONG
+
+
+  Arduino → Host (replies over Serial)
+  ------------------------------------
+  READY     once at boot
+  PONG      after PING
+  ERR       unknown / malformed command
+
+
+--------------------------------------------------------------------------------
+2) RobotController API  (app/robot/controller.py)
+--------------------------------------------------------------------------------
+Python return value for most look methods: LookState
+  LookState(
+    x, y,                 # commanded normalized look
+    eye_x_deg, eye_y_deg, # mapped angles (host-side, for display/tests)
+    head_x_deg, head_y_deg,  # None if head axes disabled
+    expression,
+  )
+
+These angles are NOT sent on the wire for LOOK (Arduino remaps LOOK itself).
+They are only for host inspection / calibration UI.
+
+  Method                    Sends to Arduino (examples)
+  ------------------------  -----------------------------------------------
+  look_at(0.72, 0.41)       LOOK,0.7200,0.4100
+                            (after deadzone + speed smoothing; may skip
+                             tiny changes; first call snaps)
+
+  snap_look(0.72, 0.41)     LOOK,0.7200,0.4100   (immediate, no speed limit)
+
+  look_at_user(face)        LOOK,<face_x>,<face_y>
+  look_at_user()            LOOK,<cached>  or  CENTER if no face cached
+
+  look_at_object(obj)       LOOK,<obj.center_normalized x>,<y>
+
+  center_eyes()             CENTER
+
+  set_expression("Happy")   EXPR,happy
+
+  nudge("LEFT")             MOVE,LEFT
+                            then LOOK,<new_x>,<new_y>   (two lines)
+  nudge("RIGHT")            MOVE,RIGHT + LOOK,...
+  nudge("UP")               MOVE,UP + LOOK,...
+  nudge("DOWN")             MOVE,DOWN + LOOK,...
+  nudge("CENTER")           CENTER only
+
+  set_servo("eye_x", 95)    SET,eye_x,95.00
+
+  ping()                    PING
+
+  flush()                   may send LOOK,... if smoothed target moved
+                            outside deadzone
+
+  update_from_vision(snap)  (nothing on wire — only caches face center)
+  remember_user(x, y)       (nothing on wire)
+
+If couple_head_to_look=True and both head axes enabled:
+  look_at(0.7, 0.3)         LOOK,0.7000,0.3000,0.7000,0.3000
+
+
+--------------------------------------------------------------------------------
+3) CALIBRATION / TEST CLI
+--------------------------------------------------------------------------------
+Entry points:
+  python tools/calibrate_robot.py [--mock] [--port DEVICE] [--baud N]
+  python -m app.robot.calibrate   [--mock] [--port DEVICE] [--baud N]
+
+Console output (human):
+  start:   "Robot calibration mode..." + current LookState line
+  each cmd: updated look=/eye angles, and when mock: "(wire) <command>"
+
+  REPL input     Console print (approx)              Wire to Arduino
+  -------------  ----------------------------------  ------------------------
+  left           look=(0.350,0.500) eye_x=...         MOVE,LEFT
+                                                     LOOK,0.3500,0.5000
+  right          look=(...)                          MOVE,RIGHT + LOOK,...
+  up             look=(...)                          MOVE,UP + LOOK,...
+  down           look=(...)                          MOVE,DOWN + LOOK,...
+  center         look=(0.500,0.500)                  CENTER
+  look 0.72 0.41 look=(0.720,0.410) eye_x=103.2°...  LOOK,0.7200,0.4100
+  expr happy     look=... expr=happy                 EXPR,happy
+  set eye_x 95   sent SET,eye_x,95.00                SET,eye_x,95.00
+  sweep eye_x    sweeping eye_x pin=9 [60,90,120]...
+                   SET eye_x=60.0                    SET,eye_x,60.00
+                   SET eye_x=120.0                   SET,eye_x,120.00
+                   SET eye_x=90.0                    SET,eye_x,90.00
+  ping           sent PING                           PING
+  state          look=... + map corner table         (nothing)
+  help / quit    help text / exit                    (nothing)
+
+With --mock and no --port: uses MockTransport (prints "(wire) ..." locally,
+never opens a serial port).
+
+
+--------------------------------------------------------------------------------
+4) TRANSPORTS — what actually hits the wire
+--------------------------------------------------------------------------------
+  MockTransport (app/robot/transport/mock.py)
+    - Does not talk to hardware
+    - Records lines in .lines and raw bytes in .raw
+    - Example raw: b"LOOK,0.7200,0.4100\\n"
+
+  SerialTransport (app/robot/transport/serial_transport.py)
+    - Writes the same bytes to USB serial (pyserial)
+    - Port from --port / ROBOT_SERIAL_PORT, baud default 115200
+
+  WifiTransport (app/robot/transport/wifi.py)
+    - Placeholder only; open()/send_line() raise NotImplementedError
+    - Same command strings would be used later over TCP/UDP
+
+
+--------------------------------------------------------------------------------
+5) OTHER ROBOT MODULES (no Arduino output by themselves)
+--------------------------------------------------------------------------------
+  app/robot/config.py
+    - ServoAxisConfig / RobotHardwareConfig
+    - Output: config objects (pins, centers, limits, invert, deadzone,
+      max_look_speed, serial_port). Not sent to Arduino; duplicate the
+      important values in robot_controller.ino CONFIGURATION block.
+
+  app/robot/mapping.py
+    - Output: floats (angles, stepped coords, deadzone bool)
+    - Used by RobotController.state and tests; Arduino has its own copy
+      of norm→angle mapping.
+
+  app/robot/protocol.py
+    - Output: command strings / bytes (see section 1)
+
+  app/robot/__init__.py
+    - Re-exports RobotController, configs, transports
+
+  tests/test_robot.py
+    - Unit tests with MockTransport; asserts on recorded wire lines
+    - Does not open serial / talk to a real Arduino
+
+  firmware/robot_controller/robot_controller.ino
+    - Consumes the wire commands above
+    - XRobots-style exponential smoothing, then Servo.writeMicroseconds(...)
+      current = target*SMOOTH_ALPHA + current*(1-SMOOTH_ALPHA)
+      (same idea as https://github.com/XRobots/ServoSmoothing)
+    - Prints READY / PONG / ERR back on Serial
+
+
+--------------------------------------------------------------------------------
+6) QUICK EXAMPLE — one vision look cycle
+--------------------------------------------------------------------------------
+  Python:
+    robot.look_at(0.72, 0.41)
+
+  Host returns:
+    LookState(x=0.72, y=0.41, eye_x_deg≈103.2, eye_y_deg≈84.6, ...)
+
+  Bytes on USB Serial:
+    LOOK,0.7200,0.4100\\n
+
+  Arduino:
+    Parses LOOK → sets eyeX/eyeY targetDeg from config → each 5 ms tick
+    exponentially blends currentDeg toward targetDeg → writeMicroseconds.
+
+
+--------------------------------------------------------------------------------
+7) DEFAULT PLACEHOLDER HARDWARE (change when wiring is known)
+--------------------------------------------------------------------------------
+  Eye X pin 9,  center 90°, min 60°, max 120°, invert false
+  Eye Y pin 10, center 90°, min 60°, max 120°, invert false
+  Head X/Y disabled (pin -1 / enabled=False)
+  Deadzone 0.02  |  host max_look_speed 1.5
+  Firmware: SMOOTH_ALPHA 0.05, LOOP_INTERVAL_MS 5, µs 1000@0° / 2000@180°
+  Baud 115200
+================================================================================

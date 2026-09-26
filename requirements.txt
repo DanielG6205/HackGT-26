@@ -2,6 +2,7 @@ elevenlabs==2.69.0
 xai-sdk==1.20.0
 python-dotenv==1.2.3
 sounddevice==0.5.6
+pyserial>=3.5
 # Local webcam vision (GUI OpenCV; do not substitute headless for the demo).
 numpy>=2.0,<3
 opencv-python==4.14.0.94
