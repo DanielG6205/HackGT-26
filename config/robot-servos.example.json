@@ -1,0 +1,5 @@
+{
+  "eyes": {"pin": 10, "min_deg": 85, "center_deg": 90, "max_deg": 95, "invert": false},
+  "neck": {"pin": 9, "min_deg": 85, "center_deg": 90, "max_deg": 95, "invert": false},
+  "head": {"pin": 8, "min_deg": 85, "center_deg": 90, "max_deg": 95, "invert": false}
+}

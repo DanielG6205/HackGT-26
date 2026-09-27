@@ -244,6 +244,16 @@ class RobotController:
         """Direct angle command for range testing (bypasses look mapping)."""
         if not math.isfinite(angle_deg):
             raise ValueError("angle_deg must be finite")
+        cfg = getattr(self.config, axis, None)
+        if axis not in {"eye_x", "eye_y", "head_x", "head_y"} or cfg is None:
+            raise ValueError(f"Unknown servo axis: {axis}")
+        if not cfg.enabled:
+            raise ValueError(f"Servo axis is disabled: {axis}")
+        low = math.ceil(cfg.min_deg * 100) / 100
+        high = math.floor(cfg.max_deg * 100) / 100
+        if low > high:
+            raise ValueError("Servo limits contain no angle representable by SET")
+        angle_deg = max(low, min(high, angle_deg))
         self._send(encode_set_axis(axis, angle_deg))
 
     def ping(self) -> None:
