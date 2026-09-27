@@ -37,8 +37,8 @@
   "mouth": {
     "pin": 11,
     "min_deg": 60,
-    "closed_deg": 60,
-    "open_deg": 110,
+    "closed_deg": 110,
+    "open_deg": 60,
     "max_deg": 110
   }
 }

@@ -67,19 +67,55 @@ def bottle(objects, frame):
     return candidates[0] if len(candidates) == 1 else None
 
 
+def green_mask(frame):
+    """Broad green range, with small speckles removed and small holes filled."""
+    import cv2
+    import numpy as np
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, (35, 65, 45), (90, 255, 255))
+    kernel = np.ones((3, 3), dtype=np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+
+def green_marker(frame, mask=None):
+    """Detect one green blob of any shape; ignore much smaller background blobs."""
+    import cv2
+    from app.vision.models import TrackedObject
+    if mask is None:
+        mask = green_mask(frame)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    height, width = frame.shape[:2]
+    contours = sorted((c for c in contours if cv2.contourArea(c) >= max(80, width*height*.0003)),
+                      key=cv2.contourArea, reverse=True)
+    if not contours:
+        return None
+    contour = contours[0]
+    if len(contours) > 1 and cv2.contourArea(contours[1]) >= .5*cv2.contourArea(contour):
+        return None  # Two similarly-sized markers: do not capture the wrong one.
+    bx, by, bw, bh = cv2.boundingRect(contour)
+    if bx == 0 or by == 0 or bx+bw >= width or by+bh >= height:
+        return None  # Clipping would shift the measured center.
+    moments = cv2.moments(contour)
+    x, y = moments['m10']/moments['m00'], moments['m01']/moments['m00']
+    return TrackedObject(None, 'green marker', 1., (bx, by, bx+bw, by+bh),
+                         (x, y), (x/width, y/height))
+
+
 def camera_mode(controller, args):
     import cv2
     from app.vision.camera import Camera
-    from app.vision.object_tracker import ObjectTracker
-    tracker = ObjectTracker(model=args.model, device=args.device)
     points = []
-    message = 'Place one blue bottle; Enter saves current detection and commanded pose.'
+    message = ('Place one bright green marker; Enter saves its detected position and robot pose.'
+               if args.mode == 'world' else 'Tracking one bright green marker.')
     print(HELP + '\n' + PAIR_HELP + '\nFocus the camera window for keys. Eyes stay centered in world mode.')
     try:
         with Camera(index=args.camera) as camera:
             while True:
                 frame, _ = camera.read()
-                target = bottle(tracker.update(frame), frame)
+                mask = green_mask(frame)
+                target = green_marker(frame, mask)
+                cv2.imshow('Green detection mask (white = detected)', mask)
                 if args.mode == 'track':
                     if target is not None:
                         controller.look_at(*target.center_normalized)
@@ -92,8 +128,8 @@ def camera_mode(controller, args):
                 lines = (label,
                          '  '.join(f'{k}={controller.pose[k]:.2f}' for k in EYES),
                          '  '.join(f'{k}={controller.pose[k]:.2f}' for k in ('neck', *LIFTS)),
-                         'Bottle: ' + (str(tuple(round(v, 3) for v in target.center_normalized))
-                                       if target else 'missing/ambiguous; cannot save'),
+                         'Green marker: ' + (str(tuple(round(v, 3) for v in target.center_normalized))
+                                       if target else 'missing/ambiguous/clipped; cannot save'),
                          message, HELP, PAIR_HELP)
                 for row, text in enumerate(lines):
                     cv2.putText(frame, text, (8, 22+24*row), cv2.FONT_HERSHEY_SIMPLEX, .42, (0, 255, 255), 1)
@@ -106,7 +142,7 @@ def camera_mode(controller, args):
                     if key in (10, 13) and target is not None:
                         x, y = target.center_normalized
                         if any((x-p['camera_x'])**2+(y-p['camera_y'])**2 < .02**2 for p in points):
-                            message = 'Too close to another sample; move bottle farther.'
+                            message = 'Too close to another sample; move marker farther.'
                             continue
                         point = dict(label=label, camera_x=x, camera_y=y,
                                      neck_angle=controller.pose['neck'],
@@ -125,7 +161,7 @@ def camera_mode(controller, args):
                         if len(points) == len(LABELS):
                             print('World calibration complete:', args.calibration)
                             return
-                        message = 'Saved. Move bottle to ' + LABELS[len(points)]
+                        message = 'Saved. Move green marker to ' + LABELS[len(points)]
     finally:
         cv2.destroyAllWindows()
 

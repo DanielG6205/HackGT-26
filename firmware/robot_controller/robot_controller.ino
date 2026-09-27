@@ -174,11 +174,13 @@ Servo eyelidRight;
 unsigned long blinkStarted = 0;
 unsigned long blinkLastWrite = 0;
 unsigned long blinkCycle = 0;
+// Broad but bounded rests; same average (3.85s) as before, much larger spread.
+const unsigned long BLINK_RESTS_MS[] = {1200, 6500, 2400, 7100, 1600, 4300};
 void updateEyelids() {
   unsigned long now = millis();
   if (now - blinkLastWrite < 20) return;
   blinkLastWrite = now;
-  const unsigned long rest = 3200 + (blinkCycle % 3) * 650;
+  const unsigned long rest = BLINK_RESTS_MS[blinkCycle % 6];
   unsigned long elapsed = now - blinkStarted;
   float closed = 0;
   if (elapsed >= rest) {
@@ -216,10 +218,10 @@ bool mouthTalking = false;
 
 uint8_t mouthPin = 0;  // Unassigned until MOUTH_CONFIG succeeds.
 
-float mouthMinDeg = 85;
-float mouthClosedDeg = 90;
-float mouthOpenDeg = 95;
-float mouthMaxDeg = 100;
+float mouthMinDeg = 110;
+float mouthClosedDeg = 110;
+float mouthOpenDeg = 60;
+float mouthMaxDeg = 60;
 
 unsigned long lastTalkMillis = 0;
 unsigned long lastMouthAnimationMillis = 0;
@@ -1333,6 +1335,16 @@ void processCommand(char* command) {
     return;
   }
 
+
+  // Explicit acknowledged close, independent of speech heartbeat timing.
+  if (strcmp(command, "MOUTH_CLOSE") == 0) {
+    if (!mouthConfigured) { Serial.println("ERROR mouth"); return; }
+    mouthTalking = false;
+    closeMouth();
+    Serial.print("MOUTH_CLOSED,");
+    Serial.println((int)round(mouthClosedDeg));
+    return;
+  }
 
   // TALK,<payload>
   if (strncmp(

@@ -67,6 +67,25 @@ class LookCalibration:
                      and x1 - margin * width <= x * width <= x2 + margin * width
                      and y1 - margin * height <= y * height <= y2 + margin * height)
 
+    def vicinity_cues(self, face, obj, image_size):
+        """Forgiving object-game check: either cue near an expanded object box."""
+        if face is None or obj is None:
+            return ()
+        width, height = image_size
+        x1, y1, x2, y2 = obj.bbox
+        tx, ty = obj.center_normalized
+        result = []
+        for channel, (x, y) in self.points(face).items():
+            # Accept a broad vicinity, but don't reward looking in the opposite
+            # direction or staring straight ahead for a far off-center object.
+            dx, dy = tx-.5, ty-.5
+            along = ((x-.5)*dx+(y-.5)*dy) / max(.001, (dx*dx+dy*dy)**.5)
+            if (abs(dx) > .18 or abs(dy) > .18) and along < .035:
+                continue
+            if x1/width-.30 <= x <= x2/width+.30 and y1/height-.30 <= y <= y2/height+.30:
+                result.append(channel)
+        return tuple(result)
+
 
 def from_mirrored_samples(samples):
     """Convert displayed marker positions back to raw camera coordinates."""

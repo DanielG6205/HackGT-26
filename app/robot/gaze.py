@@ -181,6 +181,7 @@ class GazeMap:
                 "Complete center, top, bottom, left, and right (or load a complete legacy nine-point file)"
             )
 
+        self.labels = [point["label"] for point in points]
         self.points = []
 
         for point in points:
@@ -280,6 +281,34 @@ class GazeMap:
             return self.points[
                 distances.index(min(distances))
             ][2:]
+
+        if len(self.points) == 5:
+            # A five-point session is a fan around the measured center. Linear
+            # triangles preserve direction instead of IDW pulling distant targets
+            # back toward the average servo pose. Outside: nearest calibrated edge.
+            center = self.points[self.labels.index("center")]
+            outer = sorted((p for p in self.points if p is not center),
+                           key=lambda p: math.atan2(p[1]-center[1], p[0]-center[0]))
+            nearest = None
+            for i, a in enumerate(outer):
+                b = outer[(i+1) % len(outer)]
+                denominator = (a[1]-b[1])*(center[0]-b[0]) + (b[0]-a[0])*(center[1]-b[1])
+                if abs(denominator) < 1e-10:
+                    continue
+                wc = ((a[1]-b[1])*(x-b[0]) + (b[0]-a[0])*(y-b[1])) / denominator
+                wa = ((b[1]-center[1])*(x-b[0]) + (center[0]-b[0])*(y-b[1])) / denominator
+                wb = 1-wc-wa
+                if min(wc, wa, wb) >= -1e-9:
+                    weights = [max(0., w) for w in (wc, wa, wb)]
+                    return tuple(sum(w*p[j] for w,p in zip(weights,(center,a,b)))/sum(weights)
+                                 for j in (2,3,4))
+                dx, dy = b[0]-a[0], b[1]-a[1]
+                t = max(0., min(1., ((x-a[0])*dx+(y-a[1])*dy)/(dx*dx+dy*dy)))
+                distance = (x-a[0]-t*dx)**2 + (y-a[1]-t*dy)**2
+                if nearest is None or distance < nearest[0]:
+                    nearest = (distance, tuple(a[j]+t*(b[j]-a[j]) for j in (2,3,4)))
+            if nearest is not None:
+                return nearest[1]
 
         # Inverse-distance weighting.
         weights = [1 / distance for distance in distances]

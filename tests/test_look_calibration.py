@@ -60,3 +60,15 @@ class CalibrationTests(unittest.TestCase):
                 session.update(VisionFrame(1000+i*100, (640, 480), (phone,), observation),
                                busy=False, emit=messages.append)
             self.assertEqual(messages, ['[ROBOT] Hurray!'])
+
+
+class VicinityTests(unittest.TestCase):
+    def test_general_direction_counts_but_absence_and_opposite_do_not(self):
+        calibration = LookCalibration(samples())
+        phone = TrackedObject(1, 'cell phone', .9, (480, 210, 560, 270), (520, 240), (.8125, .5))
+        # Only a small head turn: near the object, not inside its bounding box.
+        self.assertIn('head', calibration.vicinity_cues(face(9, 3, eyes=False), phone, (640, 480)))
+        self.assertEqual(calibration.vicinity_cues(face(5, 3, eyes=False), phone, (640, 480)), ())
+        self.assertEqual(calibration.vicinity_cues(face(-15, 3, eyes=False), phone, (640, 480)), ())
+        self.assertEqual(calibration.vicinity_cues(None, phone, (640, 480)), ())
+        self.assertEqual(calibration.vicinity_cues(face(9, 3), None, (640, 480)), ())

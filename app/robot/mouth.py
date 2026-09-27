@@ -24,6 +24,7 @@ class MouthAnimator:
         self.owned = False
         self.thread = None
         self.stop_event = threading.Event()
+        self._command_lock = threading.Lock()
         self._cleanup_registered = False
 
     @classmethod
@@ -101,7 +102,10 @@ class MouthAnimator:
         # Firmware closes automatically if host exits or this heartbeat stops.
         while not self.stop_event.wait(.2):
             try:
-                self.link.send_line('TALK,1')
+                with self._command_lock:
+                    if self.stop_event.is_set():
+                        return
+                    self.link.send_line('TALK,1')
             except Exception:
                 log.warning('Mouth connection lost; firmware watchdog will close it')
                 return
@@ -113,9 +117,16 @@ class MouthAnimator:
             self.thread = None
         if self.link is not None:
             try:
-                self.link.send_line('TALK,0')
+                with self._command_lock:
+                    self.link.send_line('TALK,0')  # Stops animation on older sketches too.
+                    self.link.send_line('MOUTH_CLOSE')
+                    expected = f"MOUTH_CLOSED,{int(self.config['closed_deg'])}"
+                    wait_for_reply(self.link._serial, expected, timeout=1,
+                                   ignored_replies=('ERROR command',))
+                log.info('Mouth close confirmed: pin %s, %s degrees (commanded, not measured)',
+                         self.config['pin'], self.config['closed_deg'])
             except Exception:
-                log.warning('Could not close mouth; firmware watchdog will expire')
+                log.warning('Mouth close not acknowledged. Re-upload the robot sketch and verify closed_deg; watchdog will expire.')
 
     def close(self):
         self.stop()

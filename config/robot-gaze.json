@@ -45,41 +45,41 @@
   "points": [
     {
       "label": "center",
-      "camera_x": 0.6670116901397705,
-      "camera_y": 0.7373231887817383,
+      "camera_x": 0.4710187410230914,
+      "camera_y": 0.5554344823776378,
       "neck_angle": 95.0,
       "lift_left_angle": 87.0,
       "lift_right_angle": 87.0
     },
     {
       "label": "top",
-      "camera_x": 0.5507621765136719,
-      "camera_y": 0.5367412249247233,
+      "camera_x": 0.4828983397079277,
+      "camera_y": 0.2929630756451862,
       "neck_angle": 95.0,
       "lift_left_angle": 109.0,
       "lift_right_angle": 65.0
     },
     {
       "label": "bottom",
-      "camera_x": 0.5929466247558594,
-      "camera_y": 0.8842265129089355,
+      "camera_x": 0.49775980118173113,
+      "camera_y": 0.6713479009191242,
       "neck_angle": 95.0,
       "lift_left_angle": 65.0,
       "lift_right_angle": 109.0
     },
     {
       "label": "left",
-      "camera_x": 0.7671351909637452,
-      "camera_y": 0.8163515090942383,
+      "camera_x": 0.7146656606178764,
+      "camera_y": 0.44397703792574816,
       "neck_angle": 40.0,
       "lift_left_angle": 87.0,
       "lift_right_angle": 87.0
     },
     {
       "label": "right",
-      "camera_x": 0.2922110915184021,
-      "camera_y": 0.7681673685709636,
-      "neck_angle": 150.0,
+      "camera_x": 0.24765514058506105,
+      "camera_y": 0.378483267064281,
+      "neck_angle": 131.0,
       "lift_left_angle": 87.0,
       "lift_right_angle": 87.0
     }

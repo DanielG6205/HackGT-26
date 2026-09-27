@@ -3,9 +3,9 @@
 The confirmed wiring is eye yaw on 4/5, eyelids on 6/7, vertical head movement
 on 8/9, neck rotation on 10, mouth on 11. Left/right within each pair is assumed
 in that order; swap the corresponding JSON pins if the sides are reversed.
-Python gaze/mouth commands do not move eyelids. This change does not add an
-Arduino blinking routine; retain your eyelid routine when incorporating the
-updated sketch.
+Python gaze/mouth commands do not move eyelids. Arduino smoothly blinks both
+lids with rests varying from 1.2–7.1 seconds, using the individual endpoints in the sketch. Closing
+takes 180 ms, followed by a 70 ms hold and 240 ms reopening; serial stays responsive.
 
 Upload `firmware/robot_controller/robot_controller.ino` with the mouth protocol
 support. Edit the `mouth` entry in `config/robot-servos.json` and
@@ -28,7 +28,9 @@ exactly to share its connection. Use USB at 115200 for this sketch. No mouth
 hardware is opened and speech behaves as before when ROBOT_MOUTH_CONFIG is unset.
 Setting it enables mouth motion even if a separate gaze controller is mocked.
 
-The mouth starts just before the first complete audio sample is submitted, loops
+After the main app connects to the robot, it configures the mouth and commands
+closed_deg before any speech. Until the app supplies the configuration, firmware
+leaves the mouth detached. The mouth starts just before the first complete audio sample is submitted, loops
 an open/closed pattern, and closes after the output stream drains or on an error.
 It does not animate during the initial ElevenLabs request or empty responses.
 This follows playback start/end, not phonemes or silence inside speech. A stalled
@@ -67,3 +69,19 @@ Complete world calibration before starting the main app. Human gaze calibration
 and the older eye gain/offset JSON are separate from robot world calibration.
 
 New world sessions capture five points. Existing complete nine-point files still load.
+
+
+## Find-the-object game
+
+Run `python -m app.main --mode game --transport serial --port YOUR_PORT`.
+Complete the per-person iris/head calibration shown at startup (separate from
+robot servo calibration). Ottis asks you to find a visible named object, then
+checks sustained iris-derived gaze or head direction against that object's current
+position. There is no trivia-answer step in this mode. Scoring pauses during
+speech and does not succeed if the face or target is missing. This is a calibrated
+camera-direction estimate, not precise eye fixation measurement.
+
+Stopping speech sends MOUTH_CLOSE and waits for MOUTH_CLOSED,<angle>. This
+confirms the Arduino accepted the closed command, not the mechanical position.
+If it acknowledges 60 but the mouth is open, remeasure closed_deg; do not widen
+limits to compensate. Re-upload firmware after this protocol addition.

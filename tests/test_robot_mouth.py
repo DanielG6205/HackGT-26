@@ -35,12 +35,27 @@ class MouthTests(unittest.TestCase):
                 animator.start()
                 self.assertIn(('TALK,1',), [c.args for c in link.send_line.call_args_list])
                 animator.stop()
-                self.assertEqual(link.send_line.call_args.args, ('TALK,0',))
+                self.assertEqual(link.send_line.call_args.args, ('MOUTH_CLOSE',))
                 self.assertIsNone(animator.thread)
                 animator.close()
                 link.close.assert_not_called()
             finally:
                 animator.close()
+
+    def test_stop_cannot_be_followed_by_a_late_heartbeat(self):
+        animator = MouthAnimator(dict(pin=11, min_deg=60, closed_deg=60, open_deg=110, max_deg=110), 'usb')
+        animator.link = Mock()
+        # Reproduce stop being requested after heartbeat wait but before send.
+        def interrupted_wait(timeout):
+            animator.stop_event.set()
+            return False
+        with patch.object(animator.stop_event, 'wait', side_effect=interrupted_wait):
+            animator._heartbeat()
+        animator.link.send_line.assert_not_called()
+        with patch('app.robot.mouth.wait_for_reply') as reply:
+            animator.stop()
+            self.assertEqual(animator.link.send_line.call_args.args, ('MOUTH_CLOSE',))
+            self.assertEqual(reply.call_args.args[1], 'MOUTH_CLOSED,60')
 
     def test_prepare_closes_without_talking(self):
         link = Mock()

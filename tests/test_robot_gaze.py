@@ -87,6 +87,16 @@ class RobotGazeTests(unittest.TestCase):
             self.assertEqual(GazeMap.load(path, self.axes).map(.5, .5), (90, 90, 90))
         self.assertTrue(all(86 <= angle <= 94 for angle in mapping.map(.9, .9)))
 
+    def test_five_point_linear_aim_does_not_pull_back_outside_workspace(self):
+        samples = points()
+        selected = [dict(samples[i], label=label) for i, label in
+                    zip((4, 1, 7, 3, 5), LABELS)]
+        mapping = GazeMap(selected)
+        self.assertAlmostEqual(mapping.map(.7, .5)[0], 92)
+        self.assertAlmostEqual(mapping.map(1., .5)[0], 94)
+        self.assertAlmostEqual(mapping.map(0., .5)[0], 86)
+        self.assertEqual(mapping.map(.7, .3), (92, 88, 92))
+
     def test_eye_lead_return_and_speed(self):
         self.now = .05
         self.gaze.look_at(.9, .9)

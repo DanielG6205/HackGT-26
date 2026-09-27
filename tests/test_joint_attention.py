@@ -101,6 +101,120 @@ class SessionTests(unittest.TestCase):
         self.frame(objects=[obj(), obj('book', 2, .2)])
         self.assertEqual(self.messages[-1], '[ROBOT] Do you know what a book is?')
 
+    def test_object_question_tracks_target_before_answer_without_scoring(self):
+        self.robot.config = self.robot.config.with_updates(max_look_speed=0, deadzone=0)
+        self.question()
+        self.frame('E')
+        self.assertEqual(self.session.phase, 'ANSWER')
+        self.assertGreater(self.robot.state.x, .5)
+        self.assertNotIn('[ROBOT] Hurray!', self.messages)
+        self.frame('E', objects=[obj(x=.7)])
+        self.assertAlmostEqual(self.robot.state.x, .7)
+        reply = self.session.handle('I use it to call my friends')()
+        self.assertIn('Can you look at the phone?', reply)
+        self.assertEqual(self.session.phase, 'LOOK')
+
+    def test_bottle_only_selection_repeated_rounds_and_ambiguity(self):
+        self.session.target_label = 'bottle'
+        self.session.active = True
+        self.session.enter('SELECT')
+        self.frame(objects=[obj('book', 1), obj('bottle', 2)])
+        self.assertEqual(self.session.target.label, 'bottle')
+        self.assertEqual(self.session.phase, 'ANSWER')
+        self.frame(objects=[obj('book', 1, .2), obj('bottle', 2, .8)])
+        self.assertGreater(self.robot.state.x, .5)
+        self.session.enter('SELECT')
+        self.frame(objects=[obj('bottle', 2)])
+        self.assertEqual(self.session.phase, 'ANSWER')
+        self.session.enter('SELECT')
+        self.frame(objects=[obj('bottle', 2), obj('bottle', 3)])
+        self.assertEqual(self.session.phase, 'SELECT')
+
+    def test_object_mode_never_aims_at_face_or_replacement_object(self):
+        self.session.object_game = True
+        self.session.active = True
+        self.robot = Mock()
+        self.session.enter('NAME')
+        self.frame('E')
+        self.robot.look_at.assert_not_called()
+        self.robot.hold.assert_called_once()
+        self.session.target = obj('book', 12, .8)
+        self.session.enter('LOOK')
+        self.frame('W', objects=[obj('book', 12, .7), obj('bottle', 9, .2)])
+        self.robot.look_at.assert_called_once_with(.7, .5)
+        self.robot.reset_mock()
+        self.frame('W', objects=[obj('book', 99, .2)])
+        self.robot.look_at.assert_not_called()
+        self.robot.hold.assert_called_once()
+        self.session.target = None
+        self.session.enter('BACK')
+        self.robot.reset_mock()
+        self.frame('E')
+        self.robot.look_at.assert_not_called()
+
+    def test_requested_object_game_sequence_and_repeat(self):
+        self.session.object_game = True
+        for words in ('hello', 'Ottis', 'lets play'):
+            self.assertIsNone(self.session.handle(words))
+        self.frame('E')
+        self.assertEqual(self.messages, [])
+        self.assertFalse(self.session.active)
+        self.assertIn("what's your name", self.session.handle('Hi Ottis'))
+        self.assertIn('Can you look at me?', self.session.handle('My name is Maya'))
+        self.assertEqual(json.loads(self.path.read_text()), {'name': 'Maya'})
+        self.assertEqual(self.session.phase, 'ATTENTION')
+        self.assertIsNone(self.session.handle('tell me a story'))
+        self.assertEqual(self.session.phase, 'ATTENTION')
+        self.frame('E', advance=6000)
+        self.assertTrue(self.session.active)
+        for _ in range(4):
+            self.frame()
+        self.assertEqual(self.session.phase, 'ANSWER')
+        self.assertIn('Do you know what a phone is?', self.messages[-1])
+        self.assertGreater(self.robot.state.x, .5)
+        self.assertIn('Can you look at the phone?', self.session.handle('To call people')())
+        for _ in range(4):
+            self.frame('E', busy=True)
+        self.assertEqual(self.session.phase, 'LOOK')
+        for _ in range(3):
+            self.frame('E')
+        self.assertEqual(self.session.phase, 'BACK')
+        self.assertIn('Good job, Maya!', self.messages[-1])
+        for _ in range(4):
+            self.frame()
+        self.assertEqual(self.session.phase, 'ANSWER')
+        self.assertEqual(self.session.target.label, 'cell phone')
+        self.assertIn('Do you know what a phone is?', self.messages[-1])
+
+    def test_object_selection_requires_fresh_consistent_detection(self):
+        from dataclasses import replace
+        self.session.object_game = True
+        self.session.object_confirmation_frames = 3
+        self.session.active = True
+        self.session.enter('SELECT')
+        self.robot = Mock()
+        weak = replace(obj('cup', 3), confidence=.30)
+        for _ in range(5):
+            self.frame(objects=[weak])
+        self.assertIsNone(self.session.target)
+        self.assertEqual(self.messages, [])
+        self.frame(objects=[obj('book', 5)])
+        self.frame(objects=[obj('book', 5)])
+        self.frame(objects=[])  # Lost detection resets confirmation.
+        self.frame(objects=[obj('book', 5)])
+        self.frame(objects=[obj('book', 5)])
+        self.assertIsNone(self.session.target)
+        self.robot.look_at.assert_not_called()
+        self.frame(objects=[obj('book', 5)])
+        self.assertEqual(self.session.target.label, 'book')
+        self.robot.look_at.assert_called_once_with(.8, .5)
+        self.assertIn('book', self.messages[-1])
+
+    def test_question_cannot_substitute_cup_for_selected_book(self):
+        self.session.object_game = True
+        self.session.brain.respond.return_value = 'What color is the cup?'
+        self.assertEqual(self.session.ask_about_object('book'), 'What do you use a book for?')
+
     def test_only_prompts_attention_when_observed_off_center(self):
         self.start()
         self.frame(None)

@@ -55,14 +55,14 @@ before CONFIG, but are rejected after entering calibrated mode to protect bounds
 .venv/bin/python tools/calibrate_robot.py world --port /dev/cu.usbmodemYOUR_DEVICE
 ```
 
-Focus the OpenCV window; keys now work without terminal Enter. Move one blue
-water bottle to each prompted position: center, top, bottom, left, then right. The existing YOLO
-ObjectTracker detects bottles; a blue HSV pixel check filters candidates. Use
-normal lighting and remove other blue bottles. Missing or ambiguous detections
-cannot be saved. The preview is unmirrored; positions refer to camera-image
-left/right, not the robot's anatomical left/right.
+Focus the OpenCV window; keys work without terminal Enter. Hold one bright green
+marker (green card, sticky note, or ball) in view, roughly facing the camera. Move it
+to center, top, bottom, left, then right. Keep it large enough to see and remove
+other large green objects. World calibration uses green-color detection without shape constraints and
+does not require YOLO or a bottle. Missing or ambiguous markers cannot be saved.
+The preview is unmirrored; directions refer to the camera image.
 
-Use j/l and i/k (uppercase for 5 degrees) to aim the neck/head at the bottle.
+Use j/l and i/k (uppercase for 5 degrees) to aim the neck/head at the green marker.
 Use u/o to level the head if needed; individual vertical jogs remain available.
 The working mechanical model is that the two vertical servos together control
 pitch and their difference controls tilt; confirm this using small jogs.
@@ -84,7 +84,7 @@ calibration uses JSON version 2; old three-axis calibration must be repeated.
 .venv/bin/python tools/calibrate_robot.py track --port /dev/cu.usbmodemYOUR_DEVICE
 ```
 
-This robot-only loop reuses Camera and ObjectTracker without loading speech,
+This robot-only loop reuses Camera and the green marker detector without loading speech,
 games, or AI. `--camera`, `--model`, and `--device` select existing vision inputs.
 The loop holds the last pose on detection loss. q exits holding the last pose.
 
@@ -94,8 +94,10 @@ then call `gaze.look_at(*tracked_object.center_normalized)` each frame and
 `gaze.hold()` on loss. The main app now wraps RobotController in GazeController and loads this saved
 calibration. Run it with `--transport serial --port DEVICE` after calibration.
 
-Inverse-distance interpolation uses actual measured positions, is exact at the
-samples, and stays within sampled angles outside the workspace. It is an
+Five-point calibration uses linear interpolation in triangles between the measured
+center and outer samples. Outside that workspace, it holds the nearest calibrated
+edge rather than pulling the aim back toward center. Legacy nine-point files use
+inverse-distance interpolation. Both mappings are exact at the samples. It is an
 approximation, not a camera geometry model. Targets have a 0.015 normalized
 coordinate deadzone. Eyes lead large changes by 120 ms; residual neck error drives
 both eyes’ deflection back toward their respective centers as the neck catches up. Exponential smoothing
@@ -122,3 +124,12 @@ The robot has seven existing servos plus the mouth; five participate in world
 gaze calibration, two are eyelids, and the eighth is the mouth.
 
 New world sessions capture five points. Existing complete nine-point files still load.
+
+After green-marker world calibration, `track` follows the same green marker
+to verify aiming; no YOLO model is needed. The main object game selects any supported detected object and tracks that
+selected object throughout the round.
+
+The green detection mask window shows detected pixels in white. If the marker
+is black in that window, improve lighting or use a more saturated green object.
+Keep the entire marker inside the image and remove similarly-sized green objects.
+Small background green blobs are ignored when one marker clearly dominates.

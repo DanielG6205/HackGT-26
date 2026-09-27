@@ -80,7 +80,7 @@ def run_vision_loop(args, robot, sensors, session, audio, mapping) -> None:
         image_size=args.imgsz,
     ) as vision, Camera(args.camera, args.width, args.height) as camera:
         from app.vision.look_calibration import run_calibration
-        if args.mode == 'game' and not args.skip_gaze_calibration:
+        if args.mode in {'game', 'objects'} and not args.skip_gaze_calibration:
             session.pixel_calibration = run_calibration(vision, camera)
             if session.pixel_calibration is None:
                 return
@@ -89,7 +89,7 @@ def run_vision_loop(args, robot, sensors, session, audio, mapping) -> None:
         while True:
             frame, timestamp_ms = camera.read()
             snapshot = vision.process(frame, timestamp_ms,
-                                      detect_objects=session.phase in {'CHAT', 'SELECT', 'ANSWER', 'LOOK'})
+                                      detect_objects=args.mode == 'objects' or session.phase in {'CHAT', 'SELECT', 'ANSWER', 'LOOK'})
             sensors.update(snapshot)
             if audio.error:
                 raise RuntimeError(audio.error)
@@ -97,6 +97,19 @@ def run_vision_loop(args, robot, sensors, session, audio, mapping) -> None:
                 session.update(snapshot, busy=audio.busy.is_set(), emit=audio.emit,
                                robot=robot, mapping=None)
             frame = draw(frame, snapshot)
+            if args.mode == 'objects':
+                target = session.target
+                selected = next((o for o in snapshot.objects if target and
+                                 o.track_id == target.track_id and o.label == target.label), None)
+                status = 'No selected object' if target is None else f'Target lost: {target.label}; holding pose'
+                if selected is not None:
+                    x1, y1, x2, y2 = map(int, selected.bbox)
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 4)
+                    cv2.drawMarker(frame, tuple(map(int, selected.center_px)), (0, 255, 255),
+                                   cv2.MARKER_CROSS, 24, 2)
+                    status = f'TARGET {selected.label} #{selected.track_id} {selected.confidence:.0%} px={tuple(map(int, selected.center_px))}'
+                cv2.putText(frame, f'Live detections: {len(snapshot.objects)} | {status}',
+                            (10, 50), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,255,255), 2)
             state = robot.state
             cv2.putText(
                 frame,
@@ -131,8 +144,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--wifi-port", type=int, default=0, help="TCP port (default 9000)")
     parser.add_argument("--port", default="", help="USB serial device (fallback)")
     parser.add_argument("--baud", type=int, default=0)
-    parser.add_argument("--mode", choices=("chat", "game"), default="chat",
-                        help="Free conversation by default; game enables guided looking trials")
+    parser.add_argument("--mode", choices=("chat", "game", "conversation", "objects"), default="chat",
+                        help="conversation: playful chat; objects: question, answer, and gaze game; "
+                             "chat: original free chat; game: quick find-object game")
     parser.add_argument("--no-vision", action="store_true", help="conversation only (no camera)")
     parser.add_argument("--camera", type=int, default=0)
     parser.add_argument("--width", type=int, default=1280, help="Requested camera capture width")
@@ -156,9 +170,11 @@ def main(argv: list[str] | None = None) -> int:
     
     parser.add_argument("--robot-servos", default="config/robot-servos.json", help="Measured five-servo gaze configuration")
 
-    parser.add_argument("--robot-gaze-calibration",default="config/robot-gaze.json",help="Nine-point world gaze calibration")
+    parser.add_argument("--robot-gaze-calibration",default="config/robot-gaze.json",help="Saved five-point (or legacy nine-point) robot gaze calibration")
     
     args = parser.parse_args(argv)
+    if args.no_vision and args.mode in {'game', 'objects'}:
+        parser.error('--mode game/objects requires the camera; omit --no-vision')
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -174,16 +190,22 @@ def main(argv: list[str] | None = None) -> int:
     mapping = LookMapping.load(args.eye_calibration)
 
     sensors = VisionSensorProvider()
+    conversation_prompt = CHILD_PROMPT
+    if args.mode == 'conversation':
+        conversation_prompt += ("\nPlay a lighthearted conversation game: offer simple riddles, "
+                                "imagination questions, or word games. Ask one short question at a time, "
+                                "wait for the child's answer, and respond warmly. Let them choose or "
+                                "change the activity. Do not require looking at objects.")
     if args.brain == 'grok':
         from app.ai.grok_client import GrokClient
-        brain = GrokClient(settings, system_prompt=CHILD_PROMPT)
+        brain = GrokClient(settings, system_prompt=conversation_prompt)
     else:
         from app.ai.groq_client import GroqClient
-        brain = GroqClient(settings, system_prompt=CHILD_PROMPT)
-    session = JointAttentionSession(brain, args.memory, find_object=True, angles=AngularGaze(
+        brain = GroqClient(settings, system_prompt=conversation_prompt)
+    session = JointAttentionSession(brain, args.memory, find_object=args.mode != 'objects', object_game=args.mode == 'objects', object_confirmation_frames=3, angles=AngularGaze(
         horizontal_fov=args.camera_hfov, tolerance=args.gaze_tolerance,
         yaw_offset=args.gaze_yaw_offset, pitch_offset=args.gaze_pitch_offset))
-    if args.mode == 'chat' or args.no_vision:
+    if args.mode in {'chat', 'conversation'} or args.no_vision:
         session.active = True
         session.enter('CHAT')
     audio = OttisAudio(SpeechService(settings), ListenerService(settings), session, sensors)
@@ -194,7 +216,7 @@ def main(argv: list[str] | None = None) -> int:
         audio.speech.prepare_mouth()
         robot.center_eyes()
         log.info('[AI] Provider=%s model=%s', args.brain, settings.xai_model if args.brain == 'grok' else settings.groq_model)
-        log.info('Talk freely in chat mode. Say lets play for a looking game, or just talk to return to chat.')
+        log.info('Mode=%s. Say just talk to chat, or lets play to start a looking round.', args.mode)
         if args.no_vision:
             audio.thread.start()
             log.info('Camera disabled: free conversation is ready; object trials need the camera.')
