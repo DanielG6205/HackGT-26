@@ -1,20 +1,20 @@
 {
   "eye_left": {
-    "pin": 10,
+    "pin": 4,
     "min_deg": 85,
     "center_deg": 90,
     "max_deg": 95,
     "invert": false
   },
   "eye_right": {
-    "pin": 7,
+    "pin": 5,
     "min_deg": 85,
     "center_deg": 90,
     "max_deg": 95,
     "invert": false
   },
   "neck": {
-    "pin": 9,
+    "pin": 10,
     "min_deg": 85,
     "center_deg": 90,
     "max_deg": 95,
@@ -28,7 +28,7 @@
     "invert": false
   },
   "lift_right": {
-    "pin": 6,
+    "pin": 9,
     "min_deg": 85,
     "center_deg": 90,
     "max_deg": 95,

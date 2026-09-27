@@ -30,6 +30,8 @@ def load_axes(path):
     pins = [axis.pin for axis in axes.values()]
     if len(set(pins)) != len(AXES) or any(p not in range(2, 14) for p in pins):
         raise ValueError('Use five distinct Uno digital pins 2..13')
+    if any(p in (6, 7) for p in pins):
+        raise ValueError('Pins 6 and 7 are reserved for Arduino-controlled eyelids')
     if any(not a.enabled or not 0 <= a.min_deg <= a.max_deg <= 180 for a in axes.values()):
         raise ValueError('All five servos must be enabled with limits within 0..180')
     if any(math.ceil(a.min_deg*10000) > math.floor(a.max_deg*10000) for a in axes.values()):

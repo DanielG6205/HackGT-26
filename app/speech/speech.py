@@ -22,6 +22,8 @@ class SpeechService:
         self.on_speech_end = on_speech_end
         self._lock = threading.Lock()
         self._speaking = threading.Event()
+        from app.robot.mouth import MouthAnimator
+        self._mouth = MouthAnimator.from_env()
 
     @property
     def is_speaking(self):
@@ -58,6 +60,8 @@ class SpeechService:
                         size = len(pending) // 2 * 2
                         if size:
                             if not started:
+                                if self._mouth is not None:
+                                    self._notify(self._mouth.start)
                                 self._notify(self.on_speech_start)
                                 started = True
                             speaker.write(pending[:size])
@@ -69,5 +73,7 @@ class SpeechService:
             except Exception as exc:
                 raise service_error("ElevenLabs TTS / speaker", exc) from None
             finally:
+                if self._mouth is not None:
+                    self._notify(self._mouth.stop)
                 self._speaking.clear()
                 self._notify(self.on_speech_end)

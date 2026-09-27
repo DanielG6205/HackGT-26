@@ -23,7 +23,7 @@ class RobotGazeTests(unittest.TestCase):
 
     def test_protocol_and_clamped_jogs(self):
         self.gaze.initialize()
-        self.assertEqual(self.robot.transport.lines[0], 'CONFIG,eye_left,10,85.0000,90.0000,95.0000')
+        self.assertEqual(self.robot.transport.lines[0], 'CONFIG,eye_left,4,85.0000,90.0000,95.0000')
         self.assertEqual(self.robot.transport.last, 'POSE,90.0000,90.0000,90.0000,90.0000,90.0000')
         self.gaze.jog('neck', 999)
         self.assertEqual(self.gaze.pose['neck'], 95)

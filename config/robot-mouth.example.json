@@ -1,0 +1,7 @@
+{
+  "pin": 11,
+  "min_deg": 85,
+  "closed_deg": 90,
+  "open_deg": 95,
+  "max_deg": 95
+}

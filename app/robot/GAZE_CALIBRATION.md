@@ -8,8 +8,8 @@ workflow uses CONFIG and POSE instead. Do not run two controllers on the port.
 ## 1. Servo limits
 
 Copy `config/robot-servos.example.json` to `config/robot-servos.json`. Verify the
-pins: placeholders are eye_left=10, eye_right=7, neck=9, lift_left=8,
-lift_right=6. Left/right names refer to the robot’s own left/right. These are **not measured
+pins: eye_left=4, eye_right=5, neck=10, lift_left=8, lift_right=9.
+Pins 6/7 are reserved for Arduino eyelids; pin 11 is the separate mouth servo. Left/right names refer to the robot’s own left/right. These are **not measured
 limits**. The 85/90/95 degree defaults are deliberately narrow but cannot guarantee
 mechanical safety. Check the linkage/neutral position before powering servos.
 Upload the Uno sketch using the Arduino IDE with the Servo library installed.
@@ -112,3 +112,11 @@ sketch from accepting a five-servo session. Firmware validates the whole pose
 before moving, rejects nonfinite/out-of-range data, and attaches only configured
 axes. Valid pose frames have no reply to avoid filling the serial receive buffer.
 Servo pulse resolution and mechanical accuracy still require physical testing.
+
+
+## Mouth animation during ElevenLabs playback
+
+See [MOUTH.md](MOUTH.md) for the opt-in mouth setup. Speech playback uses the
+mouth channel independently of gaze. Pins 6/7 remain under Arduino ownership.
+The robot has seven existing servos plus the mouth; five participate in world
+gaze calibration, two are eyelids, and the eighth is the mouth.

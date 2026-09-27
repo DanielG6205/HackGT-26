@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import time
+import threading
+import weakref
 
 from ..protocol import format_wire
 from .base import Transport
 
 
-def wait_for_reply(port, expected, timeout=3):
+def wait_for_reply(port, expected, timeout=3, ignored_replies=()):
     deadline = time.monotonic() + timeout
     pending = bytearray()
     while time.monotonic() < deadline:
@@ -18,6 +20,8 @@ def wait_for_reply(port, expected, timeout=3):
             reply = line.decode("ascii", errors="replace").strip()
             if reply == expected:
                 return reply
+            if reply in ignored_replies:
+                continue
             if reply.startswith("ERROR") or reply.startswith("OK,"):
                 raise RuntimeError(f"Expected {expected!r}; Uno replied {reply!r}")
     raise TimeoutError(f"No {expected!r} reply from Uno; check sketch, baud, and Serial Monitor.")
@@ -30,6 +34,13 @@ class SerialTransport(Transport):
     (typically RobotHardwareConfig.serial_port / serial_baud).
     """
 
+    _active = weakref.WeakValueDictionary()
+
+    @classmethod
+    def active(cls, port):
+        link = cls._active.get(port)
+        return link if link is not None and link.is_open() else None
+
     def __init__(self, port: str, baud: int = 115200, timeout: float = 0.1):
         if not port:
             raise ValueError("serial port must be a nonempty device path")
@@ -37,6 +48,7 @@ class SerialTransport(Transport):
         self.baud = baud
         self.timeout = timeout
         self._serial = None
+        self._write_lock = threading.Lock()
 
     def open(self) -> None:
         if self._serial is not None:
@@ -54,6 +66,7 @@ class SerialTransport(Transport):
             timeout=self.timeout,
             write_timeout=self.timeout,
         )
+        self._active[self.port] = self
 
     def close(self) -> None:
         if self._serial is None:
@@ -69,5 +82,7 @@ class SerialTransport(Transport):
     def send_line(self, line: str) -> None:
         if not self.is_open():
             raise RuntimeError("SerialTransport is closed")
-        self._serial.write(format_wire(line))
-        self._serial.flush()
+        # Mouth heartbeat and gaze can share one port without interleaving bytes.
+        with self._write_lock:
+            self._serial.write(format_wire(line))
+            self._serial.flush()
