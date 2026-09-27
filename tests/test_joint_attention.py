@@ -64,7 +64,8 @@ class SessionTests(unittest.TestCase):
 
     def test_full_cycle_answers_before_gaze_and_selects_different_object(self):
         self.question()
-        self.assertEqual(self.messages, ['[ROBOT] Do you know what a phone is?'])
+        self.assertEqual(self.messages, ['[ROBOT] Thanks for looking at me!',
+                                         '[ROBOT] Do you know what a phone is?'])
         for _ in range(5):
             self.frame('E')
         self.assertEqual(self.session.phase, 'ANSWER')
@@ -248,7 +249,7 @@ class ReturnAttentionTests(unittest.TestCase):
                 session.update(VisionFrame(1300+i*100, (640, 480), (), face),
                                busy=False, emit=messages.append)
             self.assertEqual(session.phase, 'SELECT')
-            self.assertEqual(messages, [])
+            self.assertEqual(messages, ['[ROBOT] Thanks for looking at me!'])
 
     def test_explicit_center_calibration_offsets_head_and_gaze(self):
         with tempfile.TemporaryDirectory() as directory:

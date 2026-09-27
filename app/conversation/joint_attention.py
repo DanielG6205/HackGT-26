@@ -211,6 +211,7 @@ class JointAttentionSession(OttisDialogue):
                     self.last_debug = now
                 if self.streak >= self.hold_frames:
                     self.enter('SELECT')
+                    emit('[ROBOT] Thanks for looking at me!')
                 elif not self.prompted and not attention_cues and (gaze_angles is not None or head_angles is not None):
                     self.prompted = True
                     emit('[ROBOT] Can you look back at me?' if self.phase == 'BACK'

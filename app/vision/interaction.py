@@ -147,6 +147,7 @@ class GazeInteraction:
                 return
             self.emit('[SUCCESS] User made eye contact.')
             self._enter(InteractionState.SELECT_OBJECT)
+            self.emit('[ROBOT] Thanks for looking at me!')
             self.emit('[INFO] Waiting for a tracked non-person object outside CENTER.')
         if self.state is InteractionState.SELECT_OBJECT:
             # Center objects cannot be distinguished from continued eye contact.
