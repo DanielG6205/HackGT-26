@@ -1,396 +1,71 @@
-/*
- * robot_controller.ino — host LOOK/CENTER/EXPR/MOVE/SET/PING commands with
- * XRobots-style exponential servo smoothing
- * (https://github.com/XRobots/ServoSmoothing).
- *
- * LED_TEST_MODE: no servos required. Commands blink the onboard LED and print
- * ACK lines so test_arduino.py can verify the link. Set to 0 when servos are wired.
- *
- * Blink legend (onboard LED):
- *   CENTER = 1 blink
- *   LEFT   = 2 blinks
- *   RIGHT  = 3 blinks
- *   UP     = 4 blinks
- *   DOWN   = 5 blinks
- *   LOOK   = 1 long blink
- *   EXPR   = 2 short blinks
- *   SET    = 1 short blink
- *   PING   = 1 very short blink + reply PONG
- *
- * Protocol (ASCII, newline-terminated) from host Python:
- *   LOOK,0.72,0.41
- *   CENTER / MOVE,LEFT / EXPR,neutral / SET,eye_x,95.00 / PING
- */
-
-// Set to 1 for LED-only testing (no servos). Set to 0 when hardware is ready.
-#define LED_TEST_MODE 0
-
-#if !LED_TEST_MODE
 #include <Servo.h>
-#endif
 
-// ========================= CONFIGURATION =========================
-const int PIN_LED = LED_BUILTIN;  // usually pin 13 on Uno
+const int NUM_SERVOS = 7;
 
-#if !LED_TEST_MODE
-const int PIN_EYE_X = 9;
-const int PIN_EYE_Y = 10;
-const int PIN_HEAD_X = -1;
-const int PIN_HEAD_Y = -1;
-
-const float EYE_X_CENTER = 90.0;
-const float EYE_X_MIN = 60.0;
-const float EYE_X_MAX = 120.0;
-const bool EYE_X_INVERT = false;
-
-const float EYE_Y_CENTER = 90.0;
-const float EYE_Y_MIN = 60.0;
-const float EYE_Y_MAX = 120.0;
-const bool EYE_Y_INVERT = false;
-
-const float HEAD_X_CENTER = 90.0;
-const float HEAD_X_MIN = 60.0;
-const float HEAD_X_MAX = 120.0;
-const bool HEAD_X_INVERT = false;
-
-const float HEAD_Y_CENTER = 90.0;
-const float HEAD_Y_MIN = 60.0;
-const float HEAD_Y_MAX = 120.0;
-const bool HEAD_Y_INVERT = false;
-
-const float SERVO_US_AT_0_DEG = 1000.0;
-const float SERVO_US_AT_180_DEG = 2000.0;
-const float SMOOTH_ALPHA = 0.05f;
-#endif
-
-const float MOVE_STEP_NORM = 0.15;
-const unsigned long LOOP_INTERVAL_MS = 5;
-const unsigned long BAUD = 115200;
-const unsigned long BLINK_ON_MS = 250;
-const unsigned long BLINK_OFF_MS = 200;
-const unsigned long BLINK_LONG_MS = 600;
-// =================================================================
-
-float lookX = 0.5;
-float lookY = 0.5;
-String lineBuf;
-unsigned long previousMillis = 0;
-
-#if !LED_TEST_MODE
-struct Axis {
-  Servo servo;
-  int pin;
-  float center;
-  float minDeg;
-  float maxDeg;
-  bool invert;
-  bool enabled;
-  float currentDeg;
-  float targetDeg;
+const int servoPins[NUM_SERVOS] = {
+  10, 9, 8, 7, 6, 5, 4
 };
 
-Axis eyeX, eyeY, headX, headY;
+Servo servos[NUM_SERVOS];
 
-float clampf(float v, float lo, float hi) {
-  if (v < lo) return lo;
-  if (v > hi) return hi;
-  return v;
-}
-
-float clamp01(float v) {
-  return clampf(v, 0.0f, 1.0f);
-}
-
-float degreesToMicros(float deg) {
-  float us = SERVO_US_AT_0_DEG +
-             (deg / 180.0f) * (SERVO_US_AT_180_DEG - SERVO_US_AT_0_DEG);
-  return clampf(us, 500.0f, 2500.0f);
-}
-
-void setupAxis(Axis &a, int pin, float center, float minDeg, float maxDeg, bool invert) {
-  a.pin = pin;
-  a.center = center;
-  a.minDeg = minDeg;
-  a.maxDeg = maxDeg;
-  a.invert = invert;
-  a.enabled = pin >= 0;
-  a.currentDeg = center;
-  a.targetDeg = center;
-  if (a.enabled) {
-    a.servo.attach(pin);
-    a.servo.writeMicroseconds((int)(degreesToMicros(center) + 0.5f));
-  }
-}
-
-float normToAngle(float norm, const Axis &a) {
-  float n = clamp01(norm);
-  if (a.invert) n = 1.0f - n;
-  if (n <= 0.5f) {
-    float t = n / 0.5f;
-    return a.minDeg + t * (a.center - a.minDeg);
-  }
-  float t = (n - 0.5f) / 0.5f;
-  return a.center + t * (a.maxDeg - a.center);
-}
-
-void setLook(float x, float y) {
-  lookX = clamp01(x);
-  lookY = clamp01(y);
-  if (eyeX.enabled) eyeX.targetDeg = normToAngle(lookX, eyeX);
-  if (eyeY.enabled) eyeY.targetDeg = normToAngle(lookY, eyeY);
-}
-
-void setLookWithHead(float x, float y, float hx, float hy) {
-  setLook(x, y);
-  if (headX.enabled) headX.targetDeg = normToAngle(clamp01(hx), headX);
-  if (headY.enabled) headY.targetDeg = normToAngle(clamp01(hy), headY);
-}
-
-void centerAll() {
-  lookX = 0.5f;
-  lookY = 0.5f;
-  if (eyeX.enabled) eyeX.targetDeg = eyeX.center;
-  if (eyeY.enabled) eyeY.targetDeg = eyeY.center;
-  if (headX.enabled) headX.targetDeg = headX.center;
-  if (headY.enabled) headY.targetDeg = headY.center;
-}
-
-void stepAxis(Axis &a) {
-  if (!a.enabled) return;
-  float alpha = SMOOTH_ALPHA;
-  if (alpha < 0.0f) alpha = 0.0f;
-  if (alpha > 1.0f) alpha = 1.0f;
-  a.currentDeg = (a.targetDeg * alpha) + (a.currentDeg * (1.0f - alpha));
-  a.currentDeg = clampf(a.currentDeg, a.minDeg, a.maxDeg);
-  a.servo.writeMicroseconds((int)(degreesToMicros(a.currentDeg) + 0.5f));
-}
-
-Axis *axisByName(const String &name) {
-  if (name == "eye_x") return &eyeX;
-  if (name == "eye_y") return &eyeY;
-  if (name == "head_x") return &headX;
-  if (name == "head_y") return &headY;
-  return nullptr;
-}
-
-void handleMove(const String &dir) {
-  if (dir == "CENTER") {
-    centerAll();
-    return;
-  }
-  if (dir == "LEFT") lookX -= MOVE_STEP_NORM;
-  else if (dir == "RIGHT") lookX += MOVE_STEP_NORM;
-  else if (dir == "UP") lookY -= MOVE_STEP_NORM;
-  else if (dir == "DOWN") lookY += MOVE_STEP_NORM;
-  else return;
-  setLook(lookX, lookY);
-}
-
-void handleSet(const String &axisName, float angle) {
-  Axis *a = axisByName(axisName);
-  if (a == nullptr || !a->enabled) return;
-  a->targetDeg = clampf(angle, a->minDeg, a->maxDeg);
-}
-#else
-// ---- LED test stubs (no servos) ----
-float clamp01(float v) {
-  if (v < 0.0f) return 0.0f;
-  if (v > 1.0f) return 1.0f;
-  return v;
-}
-
-void setLook(float x, float y) {
-  lookX = clamp01(x);
-  lookY = clamp01(y);
-}
-
-void setLookWithHead(float x, float y, float hx, float hy) {
-  setLook(x, y);
-  (void)hx;
-  (void)hy;
-}
-
-void centerAll() {
-  lookX = 0.5f;
-  lookY = 0.5f;
-}
-
-void handleMove(const String &dir) {
-  if (dir == "CENTER") {
-    centerAll();
-    return;
-  }
-  if (dir == "LEFT") lookX = clamp01(lookX - MOVE_STEP_NORM);
-  else if (dir == "RIGHT") lookX = clamp01(lookX + MOVE_STEP_NORM);
-  else if (dir == "UP") lookY = clamp01(lookY - MOVE_STEP_NORM);
-  else if (dir == "DOWN") lookY = clamp01(lookY + MOVE_STEP_NORM);
-}
-
-void handleSet(const String &/*axisName*/, float /*angle*/) {
-  // No servos in LED test mode.
-}
-#endif
-
-void blinkLed(int times, unsigned long onMs, unsigned long offMs) {
-  for (int i = 0; i < times; i++) {
-    digitalWrite(PIN_LED, HIGH);
-    delay(onMs);
-    digitalWrite(PIN_LED, LOW);
-    if (i + 1 < times) delay(offMs);
-  }
-}
-
-void ack(const String &kind, const String &detail, int blinks) {
-  // Always ACK *before* blinking so the host is not blocked behind delay().
-  Serial.print("ACK,");
-  Serial.print(kind);
-  if (detail.length() > 0) {
-    Serial.print(",");
-    Serial.print(detail);
-  }
-  Serial.print(",blinks=");
-  Serial.println(blinks);
-  Serial.flush();
-}
-
-void handleExpression(const String &/*name*/) {
-  // Placeholder when servos/LEDs for expressions exist.
-}
-
-void processLine(String line) {
-  line.trim();
-  if (line.length() == 0) return;
-
-#if LED_TEST_MODE
-  Serial.print("RX,");
-  Serial.println(line);
-  Serial.flush();
-#endif
-
-  String tok[5];
-  int n = 0;
-  int start = 0;
-  while (n < 5) {
-    int comma = line.indexOf(',', start);
-    if (comma < 0) {
-      tok[n++] = line.substring(start);
-      break;
-    }
-    tok[n++] = line.substring(start, comma);
-    start = comma + 1;
-  }
-  for (int i = 0; i < n; i++) tok[i].trim();
-
-  String cmd = tok[0];
-  cmd.toUpperCase();
-
-  if (cmd == "LOOK" && n >= 3) {
-    float x = tok[1].toFloat();
-    float y = tok[2].toFloat();
-    if (n >= 5) setLookWithHead(x, y, tok[3].toFloat(), tok[4].toFloat());
-    else setLook(x, y);
-#if LED_TEST_MODE
-    ack("LOOK", String(lookX, 4) + "," + String(lookY, 4), 1);
-    blinkLed(1, BLINK_LONG_MS, BLINK_OFF_MS);
-#endif
-  } else if (cmd == "CENTER") {
-    centerAll();
-#if LED_TEST_MODE
-    ack("CENTER", "", 1);
-    blinkLed(1, BLINK_ON_MS, BLINK_OFF_MS);
-#endif
-  } else if (cmd == "EXPR" && n >= 2) {
-    handleExpression(tok[1]);
-#if LED_TEST_MODE
-    ack("EXPR", tok[1], 2);
-    blinkLed(2, BLINK_ON_MS, BLINK_OFF_MS);
-#endif
-  } else if (cmd == "MOVE" && n >= 2) {
-    String d = tok[1];
-    d.toUpperCase();
-    handleMove(d);
-#if LED_TEST_MODE
-    int blinks = 0;
-    if (d == "CENTER") blinks = 1;
-    else if (d == "LEFT") blinks = 2;
-    else if (d == "RIGHT") blinks = 3;
-    else if (d == "UP") blinks = 4;
-    else if (d == "DOWN") blinks = 5;
-    if (blinks > 0) {
-      ack("MOVE", d, blinks);
-      blinkLed(blinks, BLINK_ON_MS, BLINK_OFF_MS);
-    } else {
-      Serial.println("ERR");
-    }
-#else
-    (void)d;
-#endif
-  } else if (cmd == "SET" && n >= 3) {
-    handleSet(tok[1], tok[2].toFloat());
-#if LED_TEST_MODE
-    ack("SET", tok[1] + "," + tok[2], 1);
-    blinkLed(1, BLINK_ON_MS, BLINK_OFF_MS);
-#endif
-  } else if (cmd == "PING") {
-    Serial.println("PONG");
-    Serial.flush();
-#if LED_TEST_MODE
-    blinkLed(1, BLINK_ON_MS, 0);
-#endif
-  } else {
-    Serial.println("ERR");
-  }
-}
-
-void readSerial() {
-  while (Serial.available() > 0) {
-    char c = (char)Serial.read();
-    if (c == '\n' || c == '\r') {
-      if (lineBuf.length() > 0) {
-        processLine(lineBuf);
-        lineBuf = "";
-      }
-    } else if (lineBuf.length() < 96) {
-      lineBuf += c;
-    }
-  }
-}
+String input = "";
 
 void setup() {
-  Serial.begin(BAUD);
-  pinMode(PIN_LED, OUTPUT);
-  digitalWrite(PIN_LED, LOW);
+  Serial.begin(115200);
 
-#if !LED_TEST_MODE
-  setupAxis(eyeX, PIN_EYE_X, EYE_X_CENTER, EYE_X_MIN, EYE_X_MAX, EYE_X_INVERT);
-  setupAxis(eyeY, PIN_EYE_Y, EYE_Y_CENTER, EYE_Y_MIN, EYE_Y_MAX, EYE_Y_INVERT);
-  setupAxis(headX, PIN_HEAD_X, HEAD_X_CENTER, HEAD_X_MIN, HEAD_X_MAX, HEAD_X_INVERT);
-  setupAxis(headY, PIN_HEAD_Y, HEAD_Y_CENTER, HEAD_Y_MIN, HEAD_Y_MAX, HEAD_Y_INVERT);
-  centerAll();
-#else
-  centerAll();
-  // Boot: 3 quick blinks so you know LED test firmware is running.
-  blinkLed(3, 80, 80);
-#endif
+  for (int i = 0; i < NUM_SERVOS; i++) {
+    servos[i].attach(servoPins[i]);
+
+    // Start centered
+    servos[i].write(90);
+  }
 
   Serial.println("READY");
-#if LED_TEST_MODE
-  Serial.println("MODE,LED_TEST");
-#else
-  Serial.println("MODE,SERVO");
-#endif
 }
 
 void loop() {
-  readSerial();
+  while (Serial.available() > 0) {
 
-#if !LED_TEST_MODE
-  unsigned long now = millis();
-  if (now - previousMillis < LOOP_INTERVAL_MS) return;
-  previousMillis = now;
-  stepAxis(eyeX);
-  stepAxis(eyeY);
-  stepAxis(headX);
-  stepAxis(headY);
-#endif
+    char c = Serial.read();
+
+    if (c == '\n') {
+      processCommand(input);
+      input = "";
+    }
+    else if (c != '\r') {
+      input += c;
+    }
+  }
+}
+
+void processCommand(String command) {
+
+  command.trim();
+
+  int comma = command.indexOf(',');
+
+  if (comma == -1) {
+    Serial.println("ERROR");
+    return;
+  }
+
+  int servoNumber = command.substring(0, comma).toInt();
+  int angle = command.substring(comma + 1).toInt();
+
+  if (servoNumber < 1 || servoNumber > 7) {
+    Serial.println("ERROR servo");
+    return;
+  }
+
+  if (angle < 0 || angle > 180) {
+    Serial.println("ERROR angle");
+    return;
+  }
+
+  servos[servoNumber - 1].write(angle);
+
+  Serial.print("OK,");
+  Serial.print(servoNumber);
+  Serial.print(",");
+  Serial.println(angle);
 }

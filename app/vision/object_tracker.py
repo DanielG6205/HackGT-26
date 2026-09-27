@@ -1,4 +1,4 @@
-"""YOLO nano + ByteTrack; construct one tracker per continuous camera stream."""
+"""YOLO26 + ByteTrack; construct one tracker per continuous camera stream."""
 from pathlib import Path
 from .models import TrackedObject
 
@@ -6,14 +6,18 @@ MODEL_DIR = Path(__file__).resolve().parents[1] / 'models' / 'vision'
 
 
 class ObjectTracker:
-    def __init__(self, model=None, confidence=0.25, image_size=416, device='cpu'):
+    def __init__(self, model=None, confidence=0.25, image_size=640, device='auto'):
         from ultralytics import YOLO
         if not 0 < confidence <= 1 or image_size < 32:
             raise ValueError('Invalid detection confidence or image size')
         MODEL_DIR.mkdir(parents=True, exist_ok=True)
-        self.model = YOLO(str(model or MODEL_DIR / 'yolo26n.pt'))
+        self.model = YOLO(str(model or MODEL_DIR / 'yolo26x.pt'))
         self.confidence = confidence
         self.image_size = image_size
+        if device == 'auto':
+            import torch
+            device = ('0' if torch.cuda.is_available() else
+                      'mps' if torch.backends.mps.is_available() else 'cpu')
         self.device = device
         self.objects = ()
 

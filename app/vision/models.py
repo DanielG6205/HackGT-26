@@ -29,6 +29,12 @@ class Gaze:
     # Smoothed heuristic scores, not angles or a 3D gaze ray.
     horizontal_score: float | None = None
     vertical_score: float | None = None
+    # Approximate head + iris angles; iris scale is heuristic until calibrated.
+    yaw_deg: float | None = None
+    pitch_deg: float | None = None
+    eyes_tracked: bool = False
+    eye_yaw_deg: float | None = None
+    eye_pitch_deg: float | None = None
 
 
 @dataclass(frozen=True)
@@ -60,7 +66,8 @@ class VisionFrame:
     def is_user_looking_at(self, object_id: int) -> bool | None:
         """Experimental image-sector comparison, NOT fixation detection.
 
-        None means missing object, missing face, or unusable eyes. Use only on
+        Head turns or eye gaze can supply the attention direction. None means
+        missing object, missing face, or unavailable direction. Use only on
         a fresh snapshot. Objects in the same image sector are indistinguishable.
         """
         obj = next((o for o in self.objects if o.track_id == object_id), None)

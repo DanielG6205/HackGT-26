@@ -1,8 +1,26 @@
 """USB serial transport (pyserial)."""
 from __future__ import annotations
 
+import time
+
 from ..protocol import format_wire
 from .base import Transport
+
+
+def wait_for_reply(port, expected, timeout=3):
+    deadline = time.monotonic() + timeout
+    pending = bytearray()
+    while time.monotonic() < deadline:
+        pending.extend(port.read(port.in_waiting or 1))
+        while b"\n" in pending:
+            line, _, rest = pending.partition(b"\n")
+            pending = bytearray(rest)
+            reply = line.decode("ascii", errors="replace").strip()
+            if reply == expected:
+                return reply
+            if reply.startswith("ERROR") or reply.startswith("OK,"):
+                raise RuntimeError(f"Expected {expected!r}; Uno replied {reply!r}")
+    raise TimeoutError(f"No {expected!r} reply from Uno; check sketch, baud, and Serial Monitor.")
 
 
 class SerialTransport(Transport):

@@ -17,6 +17,7 @@ class FakeClient:
         self.is_connected = False
         self.writes = []
         self.fail = False
+        self.services = SimpleNamespace(get_characteristic=lambda uuid: object())
         self.instances.append(self)
 
     async def connect(self):
@@ -38,11 +39,13 @@ class FakeClient:
 class FakeScanner:
     @staticmethod
     async def find_device_by_filter(predicate, **kwargs):
+        assert "service_uuids" not in kwargs
         device = SimpleNamespace(address="test")
         return device if predicate(device, SimpleNamespace(local_name="PicoRobot")) else None
 
     @staticmethod
     async def find_device_by_address(address, **kwargs):
+        assert "service_uuids" not in kwargs
         return SimpleNamespace(address=address)
 
 
@@ -86,6 +89,28 @@ class BluetoothTests(unittest.TestCase):
         with self.assertRaises(ConnectionError):
             self.link.open()
         self.assertIsNone(self.link._thread)
+
+    def test_explicit_address_does_not_filter_advertised_service(self):
+        self.link.address = "test-address"
+        self.link.open()
+        self.assertTrue(self.link.is_open())
+
+    def test_incompatible_firmware_disconnects_before_sending(self):
+        class OtherServices(list):
+            def get_characteristic(self, uuid):
+                return None
+
+        original_connect = FakeClient.connect
+
+        async def connect_other(client):
+            await original_connect(client)
+            client.services = OtherServices()
+
+        with patch.object(FakeClient, "connect", connect_other):
+            with self.assertRaisesRegex(ConnectionError, "different BLE protocol"):
+                self.link.open()
+        self.assertIsNone(self.link._thread)
+        self.assertEqual(FakeClient.instances[-1].writes, [])
 
     def test_factory_routes_controller_motion(self):
         from app.robot import connect_robot
@@ -138,6 +163,51 @@ class FirmwareTests(unittest.TestCase):
         self.assertTrue(all(axis.target == axis.center for axis in motion.axes.values()))
         self.assertEqual(motion.command("EXPR,happy"), "ACK,EXPR")
         self.assertEqual(motion.expression, "happy")
+
+    def test_packet_mode_never_initializes_pwm(self):
+        from unittest.mock import Mock
+        pin, pwm = Mock(), Mock()
+        with patch.object(self.fw, "Pin", pin), patch.object(self.fw, "PWM", pwm):
+            motion = self.fw.Motion()
+            before = [(a.current, a.target) for a in motion.axes.values()]
+            payload = "ECHO,hello,pi with a payload longer than twenty bytes"
+            self.assertEqual(motion.command(payload), payload)
+            self.assertEqual(motion.command("PING"), "PONG")
+            self.assertEqual(before, [(a.current, a.target) for a in motion.axes.values()])
+            motion.center()
+            for axis in motion.axes.values():
+                axis.step()
+            pin.assert_not_called()
+            pwm.assert_not_called()
+
+    def test_echo_notifications_reassemble(self):
+        from test_pico import exchange
+        link = BluetoothTransport()
+        peripheral = self.fw.RobotBLE.__new__(self.fw.RobotBLE)
+        peripheral.connection, peripheral.tx = 1, 2
+        chunks = []
+
+        def notify(connection, handle, data):
+            chunks.append(data)
+            link._notify(handle, data)
+
+        peripheral.ble = SimpleNamespace(gatts_notify=notify)
+        motion = self.fw.Motion()
+        buffer = self.fw.LineBuffer()
+
+        def send(line):
+            data = (line + "\n").encode()
+            for offset in range(0, len(data), 20):
+                for command in buffer.feed(data[offset:offset + 20]):
+                    peripheral.reply(motion.command(command))
+
+        link.send_line = send
+        message = "ECHO," + "x" * 90
+        exchange(link, message, message, timeout=0)
+        self.assertTrue(all(len(chunk) <= 20 for chunk in chunks))
+        exchange(link, "PING", "PONG", timeout=0)
+        with self.assertRaises(RuntimeError):
+            exchange(link, "PING", "wrong", timeout=0)
 
 
 if __name__ == "__main__":

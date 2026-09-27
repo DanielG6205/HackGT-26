@@ -11,19 +11,24 @@ from app.errors import service_error
 
 
 class GroqClient:
-    """Same respond/remember_assistant surface as GrokClient / DefaultBrain."""
+    """Same respond/remember_assistant surface as GrokClient."""
 
-    def __init__(self, settings=None):
+    def __init__(self, settings=None, system_prompt=SYSTEM_PROMPT):
         self.settings = settings or Settings.from_env()
         self.settings.require("groq_api_key")
         self.client = Groq(
             api_key=self.settings.groq_api_key,
             timeout=self.settings.api_timeout,
         )
+        self.system_prompt = system_prompt
         self.history: list[dict[str, str]] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
         ]
         self._lock = threading.Lock()
+
+    def reset(self):
+        with self._lock:
+            self.history = [{"role": "system", "content": self.system_prompt}]
 
     def remember_assistant(self, text: str) -> None:
         if not text.strip():

@@ -9,13 +9,18 @@ from app.errors import service_error
 
 
 class GrokClient:
-    def __init__(self, settings=None):
+    def __init__(self, settings=None, system_prompt=SYSTEM_PROMPT):
         self.settings = settings or Settings.from_env()
         self.settings.require("xai_api_key")
         self.client = Client(api_key=self.settings.xai_api_key,
                              timeout=self.settings.api_timeout)
-        self.history = [system(SYSTEM_PROMPT)]
+        self.system_prompt = system_prompt
+        self.history = [system(system_prompt)]
         self._lock = threading.Lock()
+
+    def reset(self):
+        with self._lock:
+            self.history = [system(self.system_prompt)]
 
     def remember_assistant(self, text):
         with self._lock:

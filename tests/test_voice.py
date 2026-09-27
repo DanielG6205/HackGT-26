@@ -108,7 +108,10 @@ class VoiceTests(unittest.TestCase):
         connection.send = AsyncMock(side_effect=send)
         settings = Settings(elevenlabs_api_key="fake", listen_timeout=0.03)
         with patch("app.speech.listener.ElevenLabs") as client, patch("app.speech.listener.sd.RawInputStream") as microphone:
-            client.return_value.speech_to_text.realtime.connect = AsyncMock(return_value=connection)
+            async def connect_after_capture(*args, **kwargs):
+                microphone.assert_called_once()
+                return connection
+            client.return_value.speech_to_text.realtime.connect = AsyncMock(side_effect=connect_after_capture)
             def open_mic(**kwargs):
                 kwargs["callback"](b"\0" * 3200, 1600, None, False)
                 return MagicMock()
@@ -131,7 +134,7 @@ class VoiceTests(unittest.TestCase):
     def test_listener_auth_failure_cleanup(self):
         self.run_listener("error")
 
-    def test_microphone_permission_failure_closes_connection(self):
+    def test_microphone_permission_failure_does_not_open_connection(self):
         with patch("app.speech.listener.ElevenLabs") as client, patch(
             "app.speech.listener.sd.RawInputStream", side_effect=PermissionError("private")
         ):
@@ -142,7 +145,7 @@ class VoiceTests(unittest.TestCase):
             with self.assertRaises(ServiceError) as caught:
                 listener.listen()
             self.assertNotIn("private", str(caught.exception))
-            connection.close.assert_awaited_once()
+            client.return_value.speech_to_text.realtime.connect.assert_not_awaited()
             self.assertFalse(listener._lock.locked())
 
     def test_invalid_config(self):

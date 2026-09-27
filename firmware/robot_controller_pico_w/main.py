@@ -5,7 +5,9 @@ import time
 from machine import Pin, PWM
 
 NAME = "PicoRobot"
-LED_TEST_MODE = False
+# Leave enabled until the seven servo connections have been identified.
+# No PWM is created, including at startup and on Bluetooth disconnect.
+LED_TEST_MODE = True
 # GPIO numbers, NOT physical header positions. Match app/robot/config.py.
 # name: (GPIO, center, minimum, maximum, inverted, enabled)
 AXES = {
@@ -70,6 +72,9 @@ class Motion:
         self.axes["eye_y"].look(self.y)
 
     def command(self, line):
+        # Preserve payload exactly; this command never changes motion state.
+        if line.startswith("ECHO,"):
+            return line
         parts = [part.strip() for part in line.split(",")]
         cmd, args = parts[0].upper(), parts[1:]
         try:
@@ -167,7 +172,9 @@ class RobotBLE:
     def reply(self, line):
         if self.connection is not None:
             try:
-                self.ble.gatts_notify(self.connection, self.tx, (line + "\n").encode())
+                payload = (line + "\n").encode()
+                for offset in range(0, len(payload), 20):
+                    self.ble.gatts_notify(self.connection, self.tx, payload[offset:offset + 20])
             except OSError:
                 pass  # notifications are diagnostic, never block servo updates
 

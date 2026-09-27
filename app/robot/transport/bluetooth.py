@@ -52,15 +52,25 @@ class BluetoothTransport(Transport):
             raise ImportError("Install Bluetooth support: python -m pip install bleak") from exc
         if self.address:
             device = await BleakScanner.find_device_by_address(
-                self.address, timeout=self.timeout, service_uuids=[SERVICE_UUID])
+                self.address, timeout=self.timeout)
         else:
             device = await BleakScanner.find_device_by_filter(
                 lambda device, adv: adv.local_name == self.name,
-                timeout=self.timeout, service_uuids=[SERVICE_UUID])
+                timeout=self.timeout)
         if device is None:
             raise ConnectionError(f"Pico BLE device {self.address or self.name!r} not found")
         self._client = BleakClient(device, timeout=self.timeout)
         await self._client.connect()
+        missing = [uuid for uuid in (RX_UUID, TX_UUID)
+                   if self._client.services.get_characteristic(uuid) is None]
+        if missing:
+            available = [char.uuid for service in self._client.services
+                         for char in service.characteristics]
+            raise ConnectionError(
+                "Device found and connected, but its firmware uses a different BLE protocol. "
+                f"Missing UART characteristics: {', '.join(missing)}. "
+                f"Available characteristics: {', '.join(available) or '(none)'}. "
+                "Ask for the firmware's write/notify UUIDs and packet format.")
         await self._client.start_notify(TX_UUID, self._notify)
 
     def _notify(self, _sender, data):

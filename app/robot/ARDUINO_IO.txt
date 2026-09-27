@@ -1,7 +1,13 @@
 CURRENT HARDWARE: Raspberry Pi Pico W over Bluetooth Low Energy.
 Use firmware/robot_controller_pico_w/main.py and its README.md for setup,
 wiring, protocol, and calibration. Audio remains on the computer.
-Run python test_pico.py or python -m app.robot.calibrate --transport bluetooth.
+PACKET TEST (no servo mapping needed, all 7 servos can stay unmapped):
+Upload firmware/robot_controller_pico_w/main.py with LED_TEST_MODE=True.
+No servo PWM is created at startup, during tests, or on disconnect.
+Run .venv/bin/python test_pico.py --message "hello pi" --count 5
+Expected replies: PING -> PONG and ECHO,hello pi -> ECHO,hello pi.
+This test never sends LOOK, SET, MOVE, or CENTER.
+Only use calibration after identifying servo wiring and enabling motion.
 
 The following is the legacy Arduino/ESP32 reference, retained for older boards.
 

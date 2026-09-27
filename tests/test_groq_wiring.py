@@ -18,6 +18,19 @@ SETTINGS = Settings(
 
 
 class GroqWiringTests(unittest.TestCase):
+    def test_key_alias(self):
+        with patch('app.config.load_dotenv'), patch.dict('os.environ',
+                {'GROQ_APIKEY': 'alias-key', 'GROQ_API_KEY': ''}, clear=True):
+            self.assertEqual(Settings.from_env().groq_api_key, 'alias-key')
+
+    def test_reset_preserves_child_instructions(self):
+        from app.conversation.ottis import CHILD_PROMPT
+        with patch('app.ai.groq_client.Groq'):
+            brain = GroqClient(SETTINGS, system_prompt=CHILD_PROMPT)
+            brain.remember_assistant('Hello')
+            brain.reset()
+            self.assertEqual(brain.history, [{'role': 'system', 'content': CHILD_PROMPT}])
+
     def test_groq_respond_and_sensor_not_retained(self):
         with patch("app.ai.groq_client.Groq") as client_cls:
             choice = MagicMock()

@@ -34,28 +34,25 @@ class ListenerService:
         try:
             if stop_event is not None and stop_event.is_set():
                 return ""
-            connection = await asyncio.wait_for(
-                self.client.speech_to_text.realtime.connect({
-                    "model_id": "scribe_v2_realtime",
-                    "audio_format": AudioFormat.PCM_16000,
-                    "sample_rate": 16000,
-                    "commit_strategy": CommitStrategy.VAD,
-                    "vad_silence_threshold_secs": self.settings.vad_silence,
-                }), timeout=self.settings.api_timeout)
             loop = asyncio.get_running_loop()
             result = loop.create_future()
             first_speech = None
-            chunks = queue.Queue(maxsize=20)  # At most two seconds of PCM.
+            last_partial = None
+            chunks = queue.Queue(maxsize=100)  # Bounded 10s buffer, including connection setup.
             capture_failed = threading.Event()
 
             def partial(data):
-                nonlocal first_speech
+                nonlocal first_speech, last_partial
+                if data.get("text", "").strip():
+                    last_partial = loop.time()
                 if data.get("text", "").strip() and first_speech is None:
                     first_speech = loop.time()
 
             def committed(data):
                 text = data.get("text", "").strip()
                 if text and not result.done():
+                    if last_partial is not None:
+                        log.info('[MIC] Final transcript %.2fs after last partial', loop.time() - last_partial)
                     result.set_result(text)
 
             def failed(data=None):
@@ -66,11 +63,6 @@ class ListenerService:
                     kind = kind if kind in known else "connection_error"
                     result.set_exception(ServiceError(
                         f"ElevenLabs STT: {kind}; check key, credits, terms and network"))
-
-            connection.on(RealtimeEvents.PARTIAL_TRANSCRIPT, partial)
-            connection.on(RealtimeEvents.COMMITTED_TRANSCRIPT, committed)
-            connection.on(RealtimeEvents.ERROR, failed)
-            connection.on(RealtimeEvents.CLOSE, failed)
 
             def capture(data, frames, timing, status):
                 if status:
@@ -83,7 +75,20 @@ class ListenerService:
             with sd.RawInputStream(samplerate=16000, channels=1, dtype="int16",
                                    blocksize=1600, device=self.settings.input_device,
                                    callback=capture):
-                log.info("[MIC] Listening...")
+                log.info('[MIC] Recording now; connecting to transcription...')
+                connection = await asyncio.wait_for(
+                    self.client.speech_to_text.realtime.connect({
+                        "model_id": "scribe_v2_realtime",
+                        "audio_format": AudioFormat.PCM_16000,
+                        "sample_rate": 16000,
+                        "commit_strategy": CommitStrategy.VAD,
+                        "vad_silence_threshold_secs": self.settings.vad_silence,
+                    }), timeout=self.settings.api_timeout)
+                connection.on(RealtimeEvents.PARTIAL_TRANSCRIPT, partial)
+                connection.on(RealtimeEvents.COMMITTED_TRANSCRIPT, committed)
+                connection.on(RealtimeEvents.ERROR, failed)
+                connection.on(RealtimeEvents.CLOSE, failed)
+                log.info('[MIC] Transcription ready (silence wait %.1fs)', self.settings.vad_silence)
                 started = loop.time()
                 while True:
                     if stop_event is not None and stop_event.is_set():

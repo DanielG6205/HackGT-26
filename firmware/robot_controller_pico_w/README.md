@@ -4,12 +4,18 @@ The computer runs camera tracking, conversation, microphone capture, and speaker
 playback. Only motion/control commands go to the Pico W over Bluetooth Low Energy
 (BLE). This is a GATT connection, not a Bluetooth serial port or audio device.
 
-1. Install the stable **Raspberry Pi Pico W** MicroPython UF2 from
-   https://micropython.org/download/RPI_PICO_W/ using BOOTSEL USB mode.
+1. Install the stable MicroPython UF2 matching your board using BOOTSEL USB mode:
+   [Pico W](https://micropython.org/download/RPI_PICO_W/) or
+   [Pico 2 W](https://micropython.org/download/RPI_PICO2_W/).
 2. Open the board in Thonny, select the MicroPython Raspberry Pi Pico interpreter,
    and save this directory's `main.py` onto the **board** as `main.py`. Reset it.
    USB can remain connected for power/programming; movements arrive through BLE.
-3. Wire servo signals using GPIO numbers below. Power servos from a suitable
+3. For packet testing, leave `LED_TEST_MODE=True` (the default). No servo PWM
+   is created, even at boot or disconnect. Seven servos with unknown ordering
+   can be left unmapped; this test does not require any servo pin assignments.
+   Before replacing older firmware, disconnect servo power because the older
+   firmware may center servos at startup/disconnect.
+   For later motion testing, wire servo signals using GPIO numbers below. Power servos from a suitable
    external servo supply and join its ground to Pico GND. Do not power servos
    from Pico's 3V3 pin.
 4. On the computer: `python -m pip install -r requirements.txt`.
@@ -23,10 +29,21 @@ playback. Only motion/control commands go to the Pico W over Bluetooth Low Energ
    ```
 
 6. Enable computer Bluetooth and allow Bluetooth access for your terminal/Python
-   app on macOS. Run `python test_pico.py`, then
-   `python -m app.robot.calibrate --transport bluetooth` for manual commands.
-   Run `python test_full.py --transport bluetooth` for vision and conversation.
+   app on macOS (System Settings → Privacy & Security → Bluetooth).
+   Run `.venv/bin/python test_pico.py --message "hello from my computer"` from
+   the repository root. It connects directly to `PicoRobot`; no Bluetooth
+   serial-port pairing is needed. Five rounds of `PING` → `PONG` and exact
+   text echoes prove bidirectional packet delivery. It prints round-trip times
+   and exits with an error on a missing or incorrect reply. `--count 20` runs
+   more rounds; omit `--message` for a PING-only check of older firmware.
    `python test_pico.py --mock` runs without a board.
+
+Only after identifying servo wiring and limits, set `LED_TEST_MODE=False` and
+upload again to enable motion. Then use
+`python -m app.robot.calibrate --transport bluetooth` for manual commands or
+`python test_full.py --transport bluetooth` for vision and conversation.
+The existing motion mapping covers up to four axes, not all seven servos;
+it must be extended once the wiring is known.
 
 | Axis | Pico GPIO | Physical pin | Default |
 | --- | --- | --- | --- |
@@ -43,9 +60,9 @@ Enable head axes in both configurations; set `couple_head_to_look=True` on the
 host if head movements should follow gaze. This controls the existing eye/head
 servos; drive motors need a motor driver and an additional control mapping.
 
-For a board-only check, set `LED_TEST_MODE=True` in firmware before uploading.
-No PWM is created and the onboard LED pulses when a command arrives. The smoke
-test checks a real `PONG` notification and then sends modest eye movements.
+In the default `LED_TEST_MODE=True`, no PWM is created and the onboard LED
+pulses when a command arrives. The packet test checks real reply notifications
+and sends no movement commands.
 `EXPR` stores a label for future eyelid/display behavior; it has no physical
 expression mapping yet, matching the previous firmware's placeholder.
 
@@ -53,8 +70,10 @@ The BLE UART UUIDs are service `6e400001-b5a3-f393-e0a9-e50e24dcca9e`,
 RX `6e400002-b5a3-f393-e0a9-e50e24dcca9e`, and
 TX `6e400003-b5a3-f393-e0a9-e50e24dcca9e`. Newline-delimited ASCII commands:
 `LOOK,x,y[,head_x,head_y]`, `CENTER`, `MOVE,LEFT|RIGHT|UP|DOWN|CENTER`,
-`SET,axis,degrees`, `EXPR,label`, `PING`. Replies are `ACK,kind`, `ERR,reason`,
-or `PONG`. The host splits writes into at most 20 bytes; firmware reassembles
+`SET,axis,degrees`, `EXPR,label`, `PING`, `ECHO,text`. `ECHO` returns the same
+line without changing motion state (up to 90 ASCII payload characters).
+Replies are `ACK,kind`, `ERR,reason`, `PONG`, or `ECHO,text`.
+Both writes and notifications use at most 20 bytes per fragment; each end reassembles
 commands and smooths servo movement every 5 ms. GATT write acknowledgement is
 not confirmation of physical movement. On disconnect the firmware centers all
 axes and advertises again. The host reports link failure rather than silently

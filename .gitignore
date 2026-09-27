@@ -7,3 +7,4 @@ __pycache__/
 # Downloaded vision weights and inference artifacts
 app/models/vision/
 runs/
+.ottis/

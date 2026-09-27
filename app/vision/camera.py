@@ -17,11 +17,23 @@ class Camera:
         # Best effort: some camera backends ignore this property.
         self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         self._timestamp = -1
+        self.index = index
 
     def read(self):
-        ok, frame = self.capture.read()
-        if not ok or frame is None:
-            raise RuntimeError('Webcam frame unavailable; camera may have disconnected')
+        # USB cameras can return empty frames while negotiating a capture mode.
+        for attempt in range(30 if self._timestamp < 0 else 5):
+            ok, frame = self.capture.read()
+            if ok and frame is not None and frame.size:
+                break
+            time.sleep(0.1)
+        else:
+            raise RuntimeError(
+                f'Camera {self.index} opened but produced no frames. Close other camera apps, '
+                'check camera permission and USB connection, or try another --camera index. '
+                'Try --width 640 --height 480 to check whether the requested mode is the issue.')
+        if self._timestamp < 0:
+            height, width = frame.shape[:2]
+            print(f'Camera {self.index}: actual capture {width}x{height}', flush=True)
         self._timestamp = max(self._timestamp + 1, time.monotonic_ns() // 1_000_000)
         return frame, self._timestamp
 

@@ -37,16 +37,16 @@ def draw(frame, observation, fps=None):
         head = 'HEAD: UNKNOWN'
         if face.head_yaw is not None:
             yaw, pitch = face.head_yaw, face.head_pitch
-            horizontal = 'LEFT' if yaw < -5 else 'RIGHT' if yaw > 5 else 'CENTER'
-            vertical = 'UP' if pitch < -5 else 'DOWN' if pitch > 5 else 'CENTER'
-            head = f'HEAD: {horizontal} {yaw:+.0f} deg / {vertical} {pitch:+.0f} deg'
+            head = f'HEAD: yaw={yaw:+.1f} deg pitch={pitch:+.1f} deg'
             start = pixel(face.face_center)
             end = (start[0] + int(70 * math.sin(math.radians(yaw))),
                    start[1] + int(70 * math.sin(math.radians(pitch))))
             cv2.arrowedLine(image, start, end, (255, 100, 200), 2)
         gaze = face.gaze
         looking = {True: 'YES', False: 'NO', None: 'UNKNOWN'}[gaze.looking_at_camera]
-        lines = [head, f'GAZE: {gaze.horizontal} / {gaze.vertical}',
+        angles = ('GAZE: unavailable' if gaze.yaw_deg is None or gaze.pitch_deg is None else
+                  f'EST. GAZE: yaw={gaze.yaw_deg:+.1f} deg pitch={gaze.pitch_deg:+.1f} deg')
+        lines = [head, angles,
                  f'LOOKING AT CAMERA: {looking}']
     if fps is not None:
         lines.append(f'{fps:.1f} FPS | camera image, unmirrored | q: quit')

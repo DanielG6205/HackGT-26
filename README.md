@@ -1,278 +1,284 @@
-## Robot movement: Raspberry Pi Pico W over Bluetooth
+# HackGT-26 — Ottis
 
-The computer keeps the microphone, speaker, vision, and conversation services.
-Eye/head movement commands use BLE to the Pico W. See the
-[Pico W setup and wiring guide](firmware/robot_controller_pico_w/README.md).
-After flashing the firmware and installing requirements, run `python test_pico.py`
-or `python test_full.py --transport bluetooth`.
+Ottis combines webcam object/gaze tracking, spoken questions, and conversation.
+The Arduino Uno camera test moves servo 1 for a correct answer and servo 3 for
+successfully looking toward the requested object.
 
-# Robot voice conversation
+## Setup
 
-The conversation demo currently uses `DefaultBrain`, which replies “Got it! Tell me more.” without an xAI key or API call. ElevenLabs is still required for speech and transcription. To restore Grok, uncomment its import and `brain = GrokClient(settings)` in `test_conversation.py`, and configure `XAI_API_KEY` in `.env`. The Grok-specific setup below applies when you re-enable it.
+Use Python 3.10+ and run commands from the repository root:
 
-Host-side Python conversation: streaming ElevenLabs speech → microphone/Scribe VAD → Grok → speech. Camera vision is available as an independent demo (see Camera vision below). Arduino firmware and servos are untouched.
-
-## Project layout and changed files
-
-`app/config.py` was the only existing file modified (it was empty). All other files shown with `+` were created. Existing empty directories are retained.
-
-```text
-.env.example                         + environment template
-.gitignore                           + excludes secrets and local artifacts
-requirements.txt                     + four direct dependencies
-README.md                            + this guide
-test_speech.py                       + manual paid TTS test
-test_listener.py                     + manual paid STT test
-test_conversation.py                 + manual paid conversation test
-tests/test_voice.py                  + offline unit tests
-app/
-    __init__.py                      +
-    config.py                        modified: settings and robot system prompt
-    errors.py                        + safe service errors
-    speech/
-        __init__.py                  +
-        speech.py                    + SpeechService
-        listener.py                  + ListenerService
-    ai/
-        __init__.py                  +
-        grok_client.py               + GrokClient and session history
-    conversation/
-        __init__.py                  +
-        manager.py                   + state machine and worker thread
-    behavior/                        existing
-    models/                          existing
-    vision/                          existing
-    robot/                           existing
-firmware/robot_controller/            existing
-tools/                               existing
-```
-
-## Install
-
-Run commands from the project root. Verified dependency installation and offline tests with Python **3.14.1 on macOS**. Python 3.10+ is required by this code; other Python/platform combinations have not been tested.
-
-macOS/Linux:
-
-```bash
+```sh
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-cp .env.example .env
+cp .env.example .env  # First setup only; preserve your existing .env.
 ```
 
-Windows PowerShell:
+On Windows, activate with `.venv\Scripts\Activate.ps1`. On Linux, audio may need
+`libportaudio2`. Allow microphone and camera access for your terminal or IDE.
 
-```powershell
-py -3 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-Copy-Item .env.example .env
+Configure these values in `.env`:
+
+- `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` for speech and transcription.
+- `XAI_API_KEY` (alias `GROK_API_KEY`) for the default Grok conversation provider.
+- Alternatively, `GROQ_API_KEY` (alias `GROQ_APIKEY`) and `--brain groq` for Groq.
+- Optional `AUDIO_INPUT_DEVICE` and `AUDIO_OUTPUT_DEVICE` to select audio devices.
+
+List audio devices with `python -m sounddevice`. The microphone must support
+mono 16 kHz input; the speaker must support mono 24 kHz output. Existing shell
+environment variables take precedence over `.env`.
+
+## Wake-triggered shared-attention application
+
+```sh
+python -m app.main --mock-robot                  # Camera and speech, simulated eyes
+python -m app.main --transport bluetooth        # LOOK-compatible robot firmware
+python test_full.py --mock-robot                # Same application, compatibility launcher
+python test_ottis.py --brain grok                # Same application, simulated eyes
 ```
 
-If PowerShell activation is restricted, use `.\.venv\Scripts\python.exe` in place of `python` without activating.
+The application stays silent until the transcribed speech contains Ottis (also
+accepts Otis/ Ottish). It always begins “Hi I'm Ottis, what's your name?”, waits
+for the name, asks “[Name], correct?”, and saves it only after confirmation in
+`.ottis/name.json`. A new activation asks for the name again even if one is saved.
+Say “Ottis forget my name” to delete it, or “skip” during name entry to play
+without saving a name.
 
-Audio requires a microphone, speaker, and PortAudio. The pip wheels for macOS and Windows bundle PortAudio. Debian/Ubuntu/Raspberry Pi OS need:
+After confirmation, it asks “Can you look at me?” only when a detected face is
+looking away from center. Missing faces do not trigger that request or count as
+centered attention. After several centered frames, it chooses a visible familiar
+object outside the center, asks “Do you know what a phone is?” (using the actual
+object label), and waits for an answer. It acknowledges the answer, asks the child
+to look at the object, and aims the robot eyes toward that same tracked object.
+Five consecutive gaze frames within the angular tolerance earn “Hurray!”; speech playback, lost
+objects, missing faces, and long frame gaps cannot count toward that streak.
 
-```bash
-sudo apt-get update
-sudo apt-get install -y python3-venv libportaudio2
+The eyes then return toward the child's face. Ottis requests looking back only
+if the child is still looking away, waits for centered attention, and selects a
+different object category. “Skip”/“no thanks” skips a trial; “stop”/“goodbye” returns
+to silent wake waiting. Looking timeouts are neutral. No answer or no more new
+objects eventually returns to wake waiting. Object questions and acknowledgments call the selected AI provider (xAI/Grok by
+default). Wake/name setup, gaze prompts, and success scoring remain scripted.
+Requests run on the audio worker so the camera stays responsive. `[AI]` logs
+show requests, completions, and any fallback after an API failure. The selected
+object label, question, and child answer are sent to the provider; raw images
+are not sent. Built-in wording is used if the service fails or returns an
+overlong or incorrectly formatted response.
+
+### Eye alignment
+
+Mount the camera close to the robot's eyes and keep it fixed. Start with mock
+movement, then set the physical centers, limits and inversion in your compatible
+firmware. The Pico W firmware currently has `LED_TEST_MODE = True`: it receives
+commands but does **not** drive servos until the wiring is identified and that
+setting is disabled. The numbered-angle Uno and camera-reward sketches do not
+support the application's LOOK commands.
+
+`python tools/calibrate_robot.py --help` shows the existing hardware calibration
+console. Its `look X Y` command checks normalized camera targets: center is
+`0.5 0.5`, image right increases X, and image down increases Y. Start near center.
+
+Copy `config/eye-calibration.example.json` to a local calibration JSON and run:
+
+```sh
+python -m app.main --transport bluetooth --eye-calibration config/eye-calibration.local.json
 ```
 
-On macOS, if a source installation cannot locate PortAudio, install it with `brew install portaudio`. No FFmpeg, mpv, PyAudio, or NumPy is needed: both directions use raw PCM. See the [sounddevice installation documentation](https://github.com/spatialaudio/python-sounddevice/blob/master/doc/installation.rst).
+Each axis uses `0.5 + (camera_coordinate - 0.5) * gain + offset`, clamped to
+0–1 before sending LOOK commands. Set a gain to -1 to reverse an axis, reduce its
+magnitude to reduce movement, and adjust offsets to align the neutral direction.
+Offsets are restricted to ±0.25 and gain magnitudes to (0, 2]. This mapping affects
+actual commands, not just displayed angles. Firmware remains responsible for
+physical servo travel limits. This is a manual 2D alignment; it does not estimate
+object depth or calibrate precise eye fixation.
 
-Permissions and devices:
+## Separate camera and servo reward demo
 
-- macOS: System Settings → Privacy & Security → Microphone; allow the terminal or IDE running Python. Restart it after changing permission.
-- Windows: Settings → Privacy & security → Microphone; enable microphone access and access for desktop apps. Select the intended input/output in Sound settings.
-- Linux/Pi: select working input/output in your desktop sound settings (PipeWire/PulseAudio/ALSA). Run as your normal logged-in user, not root. For a headless service, configure access to the audio devices/session separately. A Pi needs a microphone such as a USB audio device.
 
-List device names and indices:
-
-```bash
-python -m sounddevice
+```sh
+python test_camera_servos.py                         # Mock servos, real camera/audio
+python test_camera_servos.py --brain groq --camera 1 # Alternate provider/camera
 ```
 
-Use those indices or a unique name substring in `AUDIO_INPUT_DEVICE` and `AUDIO_OUTPUT_DEVICE`. Blank values use system defaults. Input must support mono 16 kHz and output mono 24 kHz; choose another device if PortAudio reports an unsupported format.
+Answer “four” to the dog-legs question to trigger servo 1. Follow the spoken
+object-looking prompt to trigger servo 3. For real hardware, upload the dedicated
+Uno sketch and follow the [wiring and calibration guide](firmware/camera_servo_test/README.md).
+That guide explains rest positions, small pulse-width steps, and USB options.
+The camera test uses **servo 1 on pin 4 and servo 3 on pin 6**.
 
-## API accounts and environment
+The main shared-attention application can also be launched without servo control:
 
-1. Sign in to [ElevenLabs](https://elevenlabs.io/app). Open Developers → API Keys and create a key with Text to Speech and Speech to Text permissions and sufficient credits. See the [official quickstart](https://elevenlabs.io/docs/eleven-api/quickstart).
-2. Open Voices / My Voices, choose or add a voice, then copy its Voice ID from its details/menu. Use the ID, not the display name. Your account must have access to that voice.
-3. Sign in to the [xAI console](https://console.x.ai/), create an API key, and configure billing/credits and model access. `grok-4.7` is the configurable default; see its [official model page](https://docs.x.ai/developers/models/grok-4.7).
-4. Edit the root `.env` locally. Never commit it. Existing shell environment variables take precedence.
-
-```dotenv
-ELEVENLABS_API_KEY=your_elevenlabs_key
-ELEVENLABS_VOICE_ID=your_voice_id
-XAI_API_KEY=your_xai_key
-XAI_MODEL=grok-4.7
-ELEVENLABS_TTS_MODEL=eleven_flash_v2_5
-LISTEN_TIMEOUT_SECONDS=10
-VAD_SILENCE_SECONDS=1.3
-MAX_UTTERANCE_SECONDS=30
-API_TIMEOUT_SECONDS=30
-AUDIO_INPUT_DEVICE=
-AUDIO_OUTPUT_DEVICE=
+```sh
+python test_ottis.py --camera 0 --width 1280 --height 720 --imgsz 640
 ```
 
-Only the two ElevenLabs values are required for TTS; STT needs only its API key. The full conversation also requires the xAI key. VAD silence must be 0.3–3 seconds. The listener gives up after `LISTEN_TIMEOUT_SECONDS` without a nonempty partial transcript, or after `MAX_UTTERANCE_SECONDS` following the first partial. At the utterance limit, uncommitted text is discarded; speak a shorter sentence. Connection setup has a separate API timeout.
+Both demos accept `--input-device INDEX`, `--brain grok|groq`, and `--yolo-model`.
+Press **q** or close the camera window to stop.
 
-## Run the three manual tests
+In the separate camera-servo reward demo, say **“Hi Ottis”** (or “Hi Otis”) to enter conversation. Ottis asks for a first
+name/nickname and confirms it before saving it in `.ottis/name.json`. Say **“skip”**
+to skip saving a name, or **“Ottis forget my name”** to delete it. This is name
+memory, not face recognition. Say **“let’s play”**, **“goodbye”**, or **“stop talking”**
+to return to the game. Conversation also expires after 45 seconds of inactivity.
 
-With the virtual environment active:
+Wait until Ottis finishes speaking before answering. Microphone and speech
+share one worker. The console shows the selected microphone and heard transcripts.
+Audio is sent to ElevenLabs even while waiting for the wake phrase; activated
+conversation turns and summarized vision context go to the selected AI provider.
+API usage can consume credits. Audio and conversations are not saved locally.
 
-```bash
-python test_speech.py
-python test_listener.py
-python test_conversation.py
+## Vision
+
+```sh
+python test_vision.py
+python test_gaze_interaction.py --silent
 ```
 
-TTS says “Hi Ottis! Nice to meet you.” STT prints your committed transcript after silence. The conversation greets you, automatically listens, asks Grok, speaks, and repeats. Say exactly “goodbye”, “bye”, or “stop talking” (case/punctuation ignored), or press Ctrl+C. A phrase like “don't say goodbye” does not end the session.
+The first run downloads YOLO and Google's Face Landmarker into
+`app/models/vision/`; later runs reuse them. Vision runs locally. Keep the cached
+models if you want to avoid downloading them again.
 
-After a silent timeout, the microphone closes, pauses briefly, and opens a new listening session. Service failures log a safe error and retry after two seconds. Fix credentials, credits, or device permissions if errors persist, or stop with Ctrl+C. Transcripts are printed for development; keys and raw SDK error bodies are not printed.
+Use `--camera` to select a webcam. The vision demo supports `--yolo-model`,
+`--face-model`, `--imgsz`, and `--device` overrides; see each script's `--help`.
+The default YOLO26x model prioritizes accuracy. Smaller weights, such as
+`--yolo-model yolo26n.pt --imgsz 416`, can reduce processing time.
+Keep the two OpenCV distributions at the same versions in `requirements.txt`;
+MediaPipe and Ultralytics use the shared `cv2` module.
 
-Run automated tests without keys, audio devices, or API calls:
+Directions refer to the **unmirrored camera image**: right is image right and
+up is image up. Gaze scoring combines head and iris observations and requires
+several fresh matching frames. Missing faces and lost objects cannot count as
+success. Direction matching is a coarse heuristic: it cannot distinguish two
+objects in the same image sector or prove fixation on a particular object.
+Center objects cannot earn directional success until they move to a side.
 
-```bash
+## Other hardware and diagnostics
+
+These are separate workflows with different firmware protocols and pin mappings:
+
+| Script | Purpose |
+| --- | --- |
+| `test_servos.py --list-ports` | List Uno USB ports |
+| `test_servos.py --port DEVICE` | Manual numbered-angle commands for the legacy Uno sketch (servo 1 = pin 10); boot centers all seven servos |
+| `test_servos.py` | BLE angle commands for a compatible seven-servo controller |
+| `test_pico.py` | Pico W BLE packet test; see the [Pico guide](firmware/robot_controller_pico_w/README.md) |
+| `test_full.py` | Camera, conversation, and motion for LOOK-protocol firmware; incompatible with the numbered-angle Uno sketch |
+| `test_arduino.py`, `tools/calibrate_robot.py` | Legacy LOOK-protocol diagnostics/calibration |
+| `test_speech.py`, `test_listener.py` | Individual speech/transcription diagnostics |
+| `test_conversation.py` | Conversation-only Groq demo |
+
+Do not use the legacy numbered-angle or LOOK-protocol tools with the camera-servo
+sketch. Its supported commands and calibration are documented in its own guide.
+
+## Code and tests
+
+- `app/vision/`: camera, object tracking, gaze, overlays, and game state.
+- `app/conversation/`: conversation worker and Ottis dialogue.
+- `app/speech/`, `app/ai/`: speech/transcription and AI provider adapters.
+- `app/robot/`: servo rewards, hardware transports, and legacy motion controls.
+- `firmware/`: separate sketches for each hardware/protocol combination.
+- `tests/`: offline automated tests. Root `test_*.py` files are manual demos.
+
+```sh
 python -m unittest discover -s tests -v
 python -m pip check
 ```
 
-## Independent APIs and vision integration
+Offline tests do not verify servo travel, live camera accuracy, audio devices,
+or authenticated API calls. Calibrate the physical assembly before use and
+supervise the child-facing demo.
 
-```python
-from app.speech.speech import SpeechService
-from app.speech.listener import ListenerService
-from app.ai.grok_client import GrokClient
-from app.conversation import ConversationManager
+### Angular gaze diagnostics
 
-speech = SpeechService()
-listener = ListenerService()
-brain = GrokClient()
+During each requested object-looking trial, `[LOOK]` console messages appear
+about twice per second, including while speech pauses scoring. They show the
+requested object/track ID, estimated gaze yaw and pitch, head yaw and pitch,
+object target angles, angular error, tolerance, the matching-frame count, and
+why a frame does not count. Positive yaw means image right; positive pitch means
+image down. Missing eye landmarks are explicitly reported as head-only tracking.
 
-speech.speak("Hello!")             # Returns after playback drains
-text = listener.listen()            # Returns final transcript or empty on timeout
-response = brain.respond(text)
+The main application's matcher uses continuous angular distance, not compass
+sectors. Default tolerance is 12 degrees, with an 8-degree neutral zone. The
+camera overlay also shows angles. The older standalone gaze-game diagnostic
+continues to use its legacy sector matcher.
 
-conversation = ConversationManager(speech, listener, brain)
-worker = conversation.start(greeting="Hi Ottis! How are you?", background=True)
-# Run your existing camera/vision loop on the main thread here.
-# When that loop ends:
-conversation.stop()
-worker.join()                       # Wait for current operation and cleanup
+```sh
+python test_full.py --mock-robot --gaze-tolerance 12 --camera-hfov 60
 ```
 
-The independent calls above demonstrate separate usage; omit them when only running the manager. The manager owns the audio services for the session: do not call `speak()` or `listen()` concurrently from vision code. Use the background mode so network/audio waits do not block your camera loop. The foreground `start()` is intentionally blocking for CLI use. Async applications can await `listener.listen_async()` and run blocking speech/brain operations with `asyncio.to_thread`.
+If the estimated gaze is biased while looking straight at the camera, use that
+neutral reading as `--gaze-yaw-offset` and `--gaze-pitch-offset` (degrees).
+`--camera-hfov` controls projection of the object's image position into camera
+angles. These settings are separate from servo alignment. The eye-angle scale
+is heuristic and the camera field of view defaults to an estimate: converting to
+angles does not itself establish more accurate fixation detection. Object camera
+bearings and a person's viewing direction are only approximately comparable;
+the system does not measure person-to-object depth or reconstruct a 3D gaze ray.
 
-The state machine is `IDLE → SPEAKING → LISTENING → THINKING → SPEAKING`, with timeouts/errors returning to IDLE before retrying. The input stream is closed before `listen()` returns. Playback drains before the manager starts another microphone session. No microphone recordings are saved locally.
+### Test eyes independently
 
-`SpeechService(on_speech_start=callback, on_speech_end=callback)` exposes lifecycle hooks and `speech.is_speaking`. Start runs before the first PCM write; end runs after cleanup, including failure cleanup. Hooks run on the conversation thread and should return quickly. They are lifecycle signals, not phoneme timing. No servo behavior is implemented.
+`python test_vision.py` now loads only face/iris tracking by default, without
+YOLO, audio, or robot movement. Keep your head still and move your eyes to check
+the `IRIS ONLY` yaw/pitch readings in the window and `[EYES]` console output.
+Head angles are printed separately. Missing iris observations explicitly show
+`EYES UNAVAILABLE`; head motion is never substituted for these readings.
+Press **c** while looking at the camera to average 20 valid frames as the neutral
+position. This calibration applies only to the diagnostic session, not the game.
+Press **q** to quit. `--frames 60` runs a short capture; `--objects` restores the
+full object/face preview. Iris angles remain heuristic estimates.
 
-The system prompt is `SYSTEM_PROMPT` in `app/config.py`. Grok remembers successful user/assistant turns and the greeting in memory. A new `GrokClient` starts a fresh session. Sensor context is already supported:
+### Full interaction test without robot movement
 
-```python
-response = brain.respond(
-    "Where is my bottle?",
-    sensor_context={"objects": [{"name": "bottle", "position": "right"}]},
-)
+```sh
+python tests/test_full.py
 ```
 
-Sensor snapshots apply only to that request, avoiding stale readings in future requests. The manager currently calls `respond(text)`; a future sensor provider can be added there. A future structured response can be introduced at this adapter boundary, passing its speech field to `_speak()` and actions to a separate hardware module.
+This launcher always forces mock robot transport, including when hardware
+endpoints are configured in `.env`. Camera, object detection, face/iris tracking,
+microphone, speech, and the wake/name/question/game sequence remain live. Say
+“Ottis” to begin and press **q** in the camera window to quit. The production
+entry point supports the same mode with `python -m app.main --mock-robot`.
 
-## Verification and limitations
+Object-looking success now accepts either an independently matching head pose
+or the combined eye/head gaze estimate. A head turn is not canceled by iris
+compensation, and eye-led looking still works with a neutral head. Both use the
+same angular tolerance and require the sustained fresh-frame streak. A neutral
+cue, missing target, missing face, and playback cannot produce success. Console
+logs show `gaze_error`, `head_error`, and `cue=head`, `cue=gaze`, or both. This
+recognizes approximate attention direction, not confirmed fixation.
 
-- Dependencies import successfully and offline tests pass on Python 3.14.1/macOS. Live microphone/speaker behavior and authenticated calls have **not** been tested; complete the three manual scripts on your robot host.
-- Half-duplex means you cannot interrupt the robot by speaking. Close microphone placement, speaker reverberation, and background voices can still produce false detections after playback ends.
-- Each listening turn opens a fresh STT socket, so setup adds latency. The first committed nonempty VAD segment ends the turn; pauses within a sentence can split a thought. See [Scribe VAD documentation](https://elevenlabs.io/docs/eleven-api/guides/how-to/speech-to-text/realtime/transcripts-and-commit-strategies).
-- TTS uses the official SDK's [streaming endpoint](https://elevenlabs.io/docs/eleven-api/guides/how-to/text-to-speech/streaming) with Flash v2.5 and raw PCM. Grok's full response is generated before TTS begins.
-- `stop()` is cooperative. Microphone polling stops promptly, but connection setup, a blocked send, Grok, or TTS may need to finish or hit a network timeout. TTS streaming uses per-network-operation timeouts, not a total playback deadline. The background thread is daemonized; stop and join it before normal application shutdown.
-- Failed API calls do not commit Grok history. A successful response remains in history if subsequent playback fails, so memory may include speech that was not fully heard.
-- History is unbounded for this prototype. Restart the client for long sessions to avoid context limits and growing token costs. There is no database or persistence.
-- Audio goes to ElevenLabs and text to xAI; no local audio files are created. Provider retention settings are separate from local storage. Repeated listening and API requests consume credits.
-- Missing keys fail early. Runtime API/audio errors recover with backoff, but invalid credentials or missing devices require manual correction. Linux/Pi and Windows are documented but not hardware-tested.
+Return-to-camera attention now accepts either centered head pose or centered gaze
+within the configured gaze tolerance. `[ATTENTION]` logs show both readings,
+which cue counts, and the hold-frame progress. While looking directly at the
+camera, press **c** in the full application to save neutral head/gaze offsets for
+this session. No face or invalid head pose cannot calibrate. Object detection is
+skipped during name entry and return-attention steps to keep face tracking fast.
 
-## Camera vision
+The full application starts microphone capture before connecting transcription,
+buffering up to 10 seconds in memory. Its default end-of-speech silence wait is
+now 0.6 seconds (`--vad-silence 1.0` allows longer pauses). `[MIC]` logs distinguish
+recording from transcription readiness. Speech playback still finishes before
+the microphone starts, and network latency still affects the final transcript.
 
-The independent `app/vision/` package provides `camera.py`, `object_tracker.py`,
-`gaze_tracker.py`, `models.py`, `pipeline.py`, and `visualizer.py`.
-`test_vision.py` is the manual webcam demo; `tests/test_vision.py` has offline tests.
+### Guided five-point calibration (default)
 
-```bash
-python -m pip install -r requirements.txt
-python test_vision.py
-```
+`python tests/test_full.py` now starts with calibration before microphone/game
+startup: **center → up → down → left → right**. Look toward the yellow marker in
+the **unmirrored camera image**, press **Space**, and hold comfortably for 20
+tracked frames. Move your eyes and/or head as you intend to during the game;
+keep your face visible and your seat/camera fixed. **r** restarts; **q** exits.
+Calibration retries if the directional readings are too similar or inconsistent.
 
-Allow camera access for your terminal/IDE. Press **q** or close the window to exit.
-The first run downloads YOLO26 nano and Google's Face Landmarker bundle into
-`app/models/vision/` (ignored by Git); later runs use the cached files. No images
-are uploaded. Override paths with `--yolo-model` and `--face-model` for offline use.
-Use `--camera 1` for another camera. Defaults are 640×480 capture, YOLO at 416,
-one face, five-frame gaze smoothing, and CPU inference. Try `--imgsz 320` for
-lower cost, or `--device mps` / `--device 0` for supported Apple/CUDA acceleration.
-The overlay reports achieved loop FPS; real-time performance depends on hardware.
-OpenCV's requested capture size/FPS/buffer size are best-effort backend settings.
-MediaPipe and Ultralytics currently declare different OpenCV distributions;
-the requirements keep both at the same release because they share `cv2`.
-Do not independently upgrade/uninstall one of those distributions.
+The per-person map uses median head/gaze readings to map the five positions to
+normalized image coordinates. A cue must have enough usable samples and distinct
+horizontal and vertical ranges to be enabled. Either calibrated head pose or
+calibrated gaze can count. During object trials, `[LOOK PIXELS]` shows the estimated
+pixel positions and target bounding box. Matching allows a margin of 12% of image
+width/height around that box and still requires consecutive fresh matching frames.
+Missing targets/faces cannot succeed. Centered cues do not earn object success.
 
-```python
-from app.vision.camera import Camera
-from app.vision.pipeline import VisionPipeline
-
-with VisionPipeline() as vision, Camera() as camera:
-    frame, timestamp_ms = camera.read()
-    snapshot = vision.process(frame, timestamp_ms)
-    bottle = vision.objects.find_best('bottle')  # TrackedObject or None
-    tracked = vision.objects.get_by_id(4)       # Latest frame only
-    sensor_context = snapshot.to_dict()         # JSON-serializable
-    maybe_followed = snapshot.is_user_looking_at(object_id=4)  # bool or None
-```
-
-Keep the same pipeline alive across frames to preserve tracker state. For audio
-integration, run the existing conversation manager in background mode and this
-camera loop on the main thread. This demo does not automatically send vision
-snapshots to the conversation manager. Processing is synchronous and bounded to
-one frame at a time, without an inference queue or recording history.
-
-The shared `VisionFrame` contains a monotonic capture timestamp in milliseconds,
-actual `(width, height)`, `coordinate_frame='camera_image'`, objects, and an optional
-face. Objects carry `track_id`, label, confidence, pixel bounding box and center,
-and normalized center. IDs can be `None` before tracking assigns one; they are
-session-local and may change after occlusion. Missing detections disappear from
-lookups immediately. The face contains a normalized center/bounding box, eye and
-face landmarks, anatomical left/right iris centers, approximate head yaw/pitch
-in degrees, and smoothed gaze categories/scores. Raw landmark locations are
-unclipped and can fall outside the image when a face is partly outside the frame.
-
-All positions use the **unmirrored camera image**: x increases rightward and y
-downward. Normalized 0/0.5/1 means left/center/right or top/center/bottom.
-Head yaw is positive toward image right; pitch is positive down. Gaze LEFT/RIGHT
-also means image directions, not the person's anatomical left/right. The overlay
-says LOOKING AT CAMERA because the robot's location relative to the camera is
-unknown. `looking_at_camera` is a heuristic, not measured eye contact.
-
-No face returns `face=None`. Blinks, very small eyes, implausible iris fits or
-unreliable pose return UNKNOWN gaze and `looking_at_camera=None`; smoothing resets
-on invalid observations, face loss, a large face jump, or a >500 ms frame gap.
-The single-face track has no identity recognition and may switch people. Head
-pose uses a generic face and estimated focal length; gaze combines head pose
-and eye-relative iris displacement and needs live tuning for lighting, glasses,
-individual eyes, off-axis faces and cameras. It is not accurate 3D gaze or depth.
-The joint-attention helper only compares gaze categories against coarse object
-image sectors. It cannot distinguish objects in the same sector or establish
-that someone actually looked at an object, especially at different depths.
-
-Future calibration can consume `snapshot.coordinate_frame`, `image_size`, a
-normalized target, and the timestamp, pairing them with the current camera/head
-pose. No mounting position, physical robot geometry, servo ranges, robot-space
-conversion or Arduino control is implemented. Normalized image points alone
-cannot supply a metric 3D target.
-
-API references: [Ultralytics tracking](https://docs.ultralytics.com/modes/track/)
-and [MediaPipe Face Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker/python).
-
-Vision verification: all 15 offline vision/voice tests pass on Python 3.14.1/macOS.
-Both downloaded models successfully processed blank frames and the overlay
-rendered without a camera. Live webcam tracking/gaze accuracy and FPS have not
-been validated on the robot hardware.
-# HackGT-26
+Calibration is held in memory and repeated on restart; it is not sent to Grok.
+It approximates general direction rather than reconstructing a 3D gaze ray.
+`--skip-gaze-calibration` retains the prior angular matcher and **c** neutral-offset
+shortcut. With calibrated pixel matching, restart to redo all five points.

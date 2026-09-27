@@ -36,9 +36,16 @@ class GazeInteraction:
     smooths head/iris scores; this controller additionally requires a streak.
     """
 
-    def __init__(self, *, horizontal_threshold=0.65, vertical_threshold=0.65,
+    def __init__(self, *, horizontal_threshold=0.85, vertical_threshold=0.85,
                  hold_frames=5, timeout=5.0, delay=1.0, emit=print,
-                 object_margin=0.1):
+                 object_margin=0.1, require_eye_contact=True, max_frame_gap=0.5,
+                 allow_center_prompt=False):
+        self.allow_center_prompt = allow_center_prompt
+        if not math.isfinite(max_frame_gap) or max_frame_gap <= 0:
+            raise ValueError('max_frame_gap must be positive')
+        self.max_frame_gap = max_frame_gap
+        self.initial_state = (InteractionState.WAIT_FOR_EYE_CONTACT if require_eye_contact
+                              else InteractionState.SELECT_OBJECT)
         for name, value in (('horizontal_threshold', horizontal_threshold),
                             ('vertical_threshold', vertical_threshold),
                             ('timeout', timeout)):
@@ -67,7 +74,7 @@ class GazeInteraction:
         self._last_time = None
         self._prompt_pending = False
         self._reported_direction = None
-        self._enter(InteractionState.WAIT_FOR_EYE_CONTACT)
+        self._enter(self.initial_state)
 
     def direction_of(self, gaze: Gaze | None):
         if gaze is None or gaze.looking_at_camera is None:
@@ -111,7 +118,7 @@ class GazeInteraction:
     def update(self, gaze: Gaze | None, now: float, objects=(), *, prompt_pending=False):
         if not math.isfinite(now) or (self._last_time is not None and now <= self._last_time):
             raise ValueError('Frame times must be finite and strictly increasing')
-        if self._last_time is not None and now - self._last_time > 0.5:
+        if self._last_time is not None and now - self._last_time > self.max_frame_gap:
             self._streak = 0
         self._last_time = now
         self.direction = self.direction_of(gaze)
@@ -129,7 +136,7 @@ class GazeInteraction:
             return  # Start counting on a fresh frame after playback completes.
         if self.state is InteractionState.COOLDOWN:
             if now >= self._deadline:
-                self._enter(InteractionState.WAIT_FOR_EYE_CONTACT)
+                self._enter(self.initial_state)
             return
         if self.direction != self._reported_direction:
             self.emit(f'[GAZE] {self.direction}')
@@ -144,7 +151,8 @@ class GazeInteraction:
         if self.state is InteractionState.SELECT_OBJECT:
             # Center objects cannot be distinguished from continued eye contact.
             candidates = [o for o in objects if o.track_id is not None
-                          and o.label != 'person' and self.object_direction(o) != 'CENTER']
+                          and o.label != 'person' and
+                          (self.allow_center_prompt or self.object_direction(o) != 'CENTER')]
             if not candidates:
                 return
             self.target_object = max(candidates, key=lambda o: o.confidence)

@@ -57,9 +57,9 @@ class Settings:
         return cls(
             elevenlabs_api_key=os.getenv("ELEVENLABS_API_KEY", ""),
             elevenlabs_voice_id=os.getenv("ELEVENLABS_VOICE_ID", ""),
-            xai_api_key=os.getenv("XAI_API_KEY", ""),
+            xai_api_key=os.getenv("XAI_API_KEY", "").strip() or os.getenv("GROK_API_KEY", "").strip(),
             xai_model=os.getenv("XAI_MODEL", "grok-4.7"),
-            groq_api_key=os.getenv("GROQ_API_KEY", ""),
+            groq_api_key=os.getenv("GROQ_API_KEY", "").strip() or os.getenv("GROQ_APIKEY", "").strip(),
             groq_model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
             tts_model=os.getenv("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5"),
             listen_timeout=float(os.getenv("LISTEN_TIMEOUT_SECONDS", "10")),
