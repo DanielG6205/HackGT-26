@@ -5,13 +5,13 @@ from pathlib import Path
 from dataclasses import replace
 
 from app.robot import RobotController
-from app.robot.gaze import GazeController, GazeMap, LABELS, load_axes, save_points
+from app.robot.gaze import GazeController, GazeMap, LABELS, LEGACY_LABELS, load_axes, save_points
 
 
 def points():
     return [dict(label=label, camera_x=.1+.4*(i%3), camera_y=.1+.4*(i//3),
                  neck_angle=86+4*(i%3), lift_left_angle=86+4*(i//3), lift_right_angle=94-4*(i//3))
-            for i, label in enumerate(LABELS)]
+            for i, label in enumerate(LEGACY_LABELS)]
 
 
 class RobotGazeTests(unittest.TestCase):
@@ -70,6 +70,22 @@ class RobotGazeTests(unittest.TestCase):
         bad[1].update(camera_x=.1, camera_y=.1)
         with self.assertRaises(ValueError):
             GazeMap(bad)
+
+    def test_five_point_calibration(self):
+        samples = points()
+        selected = [dict(samples[i], label=label) for i, label in
+                    zip((4, 1, 7, 3, 5), LABELS)]
+        mapping = GazeMap(selected)
+        for point in selected:
+            self.assertEqual(mapping.map(point['camera_x'], point['camera_y']),
+                             (point['neck_angle'], point['lift_left_angle'], point['lift_right_angle']))
+        with self.assertRaises(ValueError):
+            GazeMap(selected[:4])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'five.json'
+            save_points(path, self.axes, selected)
+            self.assertEqual(GazeMap.load(path, self.axes).map(.5, .5), (90, 90, 90))
+        self.assertTrue(all(86 <= angle <= 94 for angle in mapping.map(.9, .9)))
 
     def test_eye_lead_return_and_speed(self):
         self.now = .05

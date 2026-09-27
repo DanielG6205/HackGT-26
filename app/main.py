@@ -17,16 +17,26 @@ from app.robot.config import RobotHardwareConfig
 from app.speech.listener import ListenerService
 from app.speech.speech import SpeechService
 from app.vision.sensor_provider import VisionSensorProvider
-
+from app.robot.gaze import GazeController, GazeMap, load_axes
 
 log = logging.getLogger(__name__)
 
 
-def build_robot(args, settings: Settings):
+def build_robot(args, settings):
+    # Validate saved calibration before opening/resetting any hardware.
+    axes = load_axes(args.robot_servos)
+
+    calibration = GazeMap.load(
+        args.robot_gaze_calibration,
+        axes,
+    )
+
     config = RobotHardwareConfig.from_env()
+
     if args.baud:
         config = config.with_updates(serial_baud=args.baud)
-    return connect_robot(
+
+    robot = connect_robot(
         config,
         mock=args.mock_robot,
         transport=args.transport or None,
@@ -36,6 +46,23 @@ def build_robot(args, settings: Settings):
         wifi_port=args.wifi_port or settings.robot_wifi_port or None,
         serial_port=args.port or settings.robot_serial_port or None,
     )
+
+    # The calibrated gaze controller currently requires the Arduino
+    # serial protocol implemented by firmware/robot_controller.
+
+    gaze = GazeController(
+        robot,
+        axes,
+        calibration,
+    )
+
+    try:
+        gaze.initialize()
+    except BaseException:
+        robot.close()
+        raise
+
+    return gaze
 
 
 def run_vision_loop(args, robot, sensors, session, audio, mapping) -> None:
@@ -68,7 +95,7 @@ def run_vision_loop(args, robot, sensors, session, audio, mapping) -> None:
                 raise RuntimeError(audio.error)
             with session.lock:
                 session.update(snapshot, busy=audio.busy.is_set(), emit=audio.emit,
-                               robot=robot, mapping=mapping)
+                               robot=robot, mapping=None)
             frame = draw(frame, snapshot)
             state = robot.state
             cv2.putText(
@@ -126,6 +153,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--gaze-pitch-offset', type=float, default=0, help='Observed neutral gaze pitch, subtracted in degrees')
     parser.add_argument('--vad-silence', type=float, default=.6, help='Seconds of silence before submitting speech (default 0.6)')
     parser.add_argument('--skip-gaze-calibration', action='store_true', help='Use the older angular matcher without guided calibration')
+    
+    parser.add_argument("--robot-servos", default="config/robot-servos.json", help="Measured five-servo gaze configuration")
+
+    parser.add_argument("--robot-gaze-calibration",default="config/robot-gaze.json",help="Nine-point world gaze calibration")
+    
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -148,7 +180,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         from app.ai.groq_client import GroqClient
         brain = GroqClient(settings, system_prompt=CHILD_PROMPT)
-    session = JointAttentionSession(brain, args.memory, angles=AngularGaze(
+    session = JointAttentionSession(brain, args.memory, find_object=True, angles=AngularGaze(
         horizontal_fov=args.camera_hfov, tolerance=args.gaze_tolerance,
         yaw_offset=args.gaze_yaw_offset, pitch_offset=args.gaze_pitch_offset))
     if args.mode == 'chat' or args.no_vision:
@@ -159,6 +191,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.mock_robot or args.transport == 'mock':
         log.info('[robot] Mock movement only; camera, microphone and speech remain live.')
     try:
+        audio.speech.prepare_mouth()
         robot.center_eyes()
         log.info('[AI] Provider=%s model=%s', args.brain, settings.xai_model if args.brain == 'grok' else settings.groq_model)
         log.info('Talk freely in chat mode. Say lets play for a looking game, or just talk to return to chat.')

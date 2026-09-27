@@ -16,6 +16,17 @@ class MouthTests(unittest.TestCase):
         with patch.dict(os.environ, {'ROBOT_MOUTH_CONFIG': '/nonexistent/mouth.json'}, clear=True):
             self.assertIsNone(MouthAnimator.from_env())
 
+    def test_shared_servo_config(self):
+        from pathlib import Path
+        from app.robot.gaze import load_axes
+        path = Path(__file__).resolve().parents[1] / 'config/robot-servos.example.json'
+        with patch.dict(os.environ, {'ROBOT_MOUTH_CONFIG': str(path),
+                                    'ROBOT_MOUTH_PORT': 'test-usb'}, clear=True):
+            mouth = MouthAnimator.from_env()
+            self.assertIsNotNone(mouth)
+            self.assertEqual(mouth.config['pin'], 11)
+            self.assertEqual(len(load_axes(path)), 5)
+
     def test_shared_transport_and_stop(self):
         link = Mock()
         animator = MouthAnimator(dict(pin=11, min_deg=85, closed_deg=90, open_deg=95, max_deg=95), 'usb')
@@ -30,6 +41,18 @@ class MouthTests(unittest.TestCase):
                 link.close.assert_not_called()
             finally:
                 animator.close()
+
+    def test_prepare_closes_without_talking(self):
+        link = Mock()
+        animator = MouthAnimator(dict(pin=11, min_deg=60, closed_deg=60, open_deg=110, max_deg=110), 'usb')
+        with patch('app.robot.mouth.SerialTransport.active', return_value=link), patch('app.robot.mouth.wait_for_reply'):
+            self.assertTrue(animator.prepare())
+            commands = [c.args[0] for c in link.send_line.call_args_list]
+            self.assertIn('MOUTH_CONFIG,11,60,60,110,110', commands)
+            self.assertEqual(commands[-1], 'TALK,0')
+            self.assertNotIn('TALK,1', commands)
+            self.assertIsNone(animator.thread)
+            animator.close()
 
     def test_playback_start_drain_and_error_cleanup(self):
         settings = Settings(elevenlabs_api_key='fake', elevenlabs_voice_id='fake')

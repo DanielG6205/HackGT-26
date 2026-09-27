@@ -51,6 +51,22 @@ class SessionTests(unittest.TestCase):
             self.frame()
         self.assertEqual(self.session.phase, 'ANSWER')
 
+    def test_find_object_prompt_and_visual_success(self):
+        self.session.find_object = True
+        self.start()
+        for _ in range(4):
+            self.frame()
+        self.assertEqual(self.session.phase, 'LOOK')
+        self.assertIn('Can you find the phone?', self.messages[-1])
+        self.session.brain.respond.assert_not_called()
+        for _ in range(4):
+            self.frame('E', busy=True)
+        self.assertEqual(self.session.phase, 'LOOK')
+        for _ in range(3):
+            self.frame('E')
+        self.assertEqual(self.session.phase, 'BACK')
+        self.assertEqual(self.messages[-1], '[ROBOT] Hurray!')
+
     def test_silent_until_wake_and_persistent_confirmed_name(self):
         self.assertIsNone(self.session.handle('hello'))
         for _ in range(5):

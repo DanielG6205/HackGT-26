@@ -49,14 +49,14 @@ jogs are for measuring limits and aligning the linkage. Initial centering is imm
 center. Other servos are not attached on boot. Legacy numeric commands still work
 before CONFIG, but are rejected after entering calibrated mode to protect bounds.
 
-## 2. Nine-point world calibration
+## 2. Five-point world calibration
 
 ```sh
 .venv/bin/python tools/calibrate_robot.py world --port /dev/cu.usbmodemYOUR_DEVICE
 ```
 
 Focus the OpenCV window; keys now work without terminal Enter. Move one blue
-water bottle to each prompted position of the 3x3 workspace. The existing YOLO
+water bottle to each prompted position: center, top, bottom, left, then right. The existing YOLO
 ObjectTracker detects bottles; a blue HSV pixel check filters candidates. Use
 normal lighting and remove other blue bottles. Missing or ambiguous detections
 cannot be saved. The preview is unmirrored; positions refer to camera-image
@@ -71,7 +71,7 @@ actual detected camera center and all three commanded neck/vertical angles:
 `camera_x`, `camera_y`, `neck_angle`, `lift_left_angle`, `lift_right_angle`.
 Both eye servos remain at their individual centers. Saving both vertical angles
 preserves the manually aligned pitch/tilt without assuming identical linkages. Each capture
-atomically checkpoints `config/robot-gaze.json`. All nine points are required for
+atomically checkpoints `config/robot-gaze.json`. All five points are required for
 tracking. Starting world mode starts a new session; its first save replaces the
 previous file. Quit leaves a partial checkpoint, which runtime rejects. Use
 `--calibration PATH` to keep multiple setups. Keep camera and robot mounts fixed;
@@ -91,8 +91,8 @@ The loop holds the last pose on detection loss. q exits holding the last pose.
 For another existing detector consumer, construct GazeController with a connected
 RobotController, load_axes(path), and GazeMap.load(path, axes); initialize once,
 then call `gaze.look_at(*tracked_object.center_normalized)` each frame and
-`gaze.hold()` on loss. The old RobotController.look_at path is not automatically
-switched to calibrated tracking.
+`gaze.hold()` on loss. The main app now wraps RobotController in GazeController and loads this saved
+calibration. Run it with `--transport serial --port DEVICE` after calibration.
 
 Inverse-distance interpolation uses actual measured positions, is exact at the
 samples, and stays within sampled angles outside the workspace. It is an
@@ -120,3 +120,5 @@ See [MOUTH.md](MOUTH.md) for the opt-in mouth setup. Speech playback uses the
 mouth channel independently of gaze. Pins 6/7 remain under Arduino ownership.
 The robot has seven existing servos plus the mouth; five participate in world
 gaze calibration, two are eyelids, and the eighth is the mouth.
+
+New world sessions capture five points. Existing complete nine-point files still load.

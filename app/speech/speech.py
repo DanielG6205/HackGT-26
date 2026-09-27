@@ -25,6 +25,11 @@ class SpeechService:
         from app.robot.mouth import MouthAnimator
         self._mouth = MouthAnimator.from_env()
 
+    def prepare_mouth(self):
+        """Call after the robot connects to close the mouth before the first utterance."""
+        if self._mouth is not None:
+            self._notify(self._mouth.prepare)
+
     @property
     def is_speaking(self):
         return self._speaking.is_set()

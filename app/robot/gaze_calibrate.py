@@ -113,7 +113,7 @@ def camera_mode(controller, args):
                                      lift_left_angle=controller.pose['lift_left'],
                                      lift_right_angle=controller.pose['lift_right'])
                         proposed = points + [point]
-                        if len(proposed) == 9:
+                        if len(proposed) == len(LABELS):
                             try:
                                 GazeMap(proposed)
                             except ValueError as exc:
@@ -122,7 +122,7 @@ def camera_mode(controller, args):
                         points = proposed
                         save_points(args.calibration, controller.axes, points)
                         print(f'Saved {label}: {point}')
-                        if len(points) == 9:
+                        if len(points) == len(LABELS):
                             print('World calibration complete:', args.calibration)
                             return
                         message = 'Saved. Move bottle to ' + LABELS[len(points)]

@@ -22,11 +22,12 @@ class JointAttentionSession(OttisDialogue):
     # Visual trials have their own deadlines; do not expire during a looking game.
     idle_timeout = None
 
-    def __init__(self, brain, memory_path, *, timeout=15, hold_frames=5, angles=None):
+    def __init__(self, brain, memory_path, *, timeout=15, hold_frames=5, angles=None, find_object=False):
         super().__init__(brain, memory_path)
         self.lock = threading.RLock()
         self.phase = 'SLEEPING'
         self.target = None
+        self.find_object = find_object
         self.seen = set()
         self.object_question = None
         self.pixel_calibration = None
@@ -234,9 +235,13 @@ class JointAttentionSession(OttisDialogue):
                     return
                 self.target = max(unseen, key=lambda o: o.confidence)
                 self.seen.add(self.target.label)
-                self.enter('ANSWER')
                 label = self.label
-                emit(lambda: self.ask_about_object(label))
+                if self.find_object:
+                    self.enter('LOOK')
+                    emit(f'[ROBOT] Can you find the {label}? Look at it and hold your gaze.')
+                else:
+                    self.enter('ANSWER')
+                    emit(lambda: self.ask_about_object(label))
                 return
             if self.phase == 'ANSWER':
                 if now >= self.deadline:

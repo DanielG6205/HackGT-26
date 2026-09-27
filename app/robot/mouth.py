@@ -1,6 +1,6 @@
 """Optional mouth animation tied to SpeechService playback, not TTS requests.
 
-Set ROBOT_MOUTH_CONFIG to a measured mouth JSON and ROBOT_MOUTH_PORT (or
+Set ROBOT_MOUTH_CONFIG=config/robot-servos.json and ROBOT_MOUTH_PORT (or
 ROBOT_SERIAL_PORT). Reuses an already-open USB transport; never owns gaze motion.
 """
 import atexit
@@ -32,10 +32,16 @@ class MouthAnimator:
         if not path:
             return None  # Existing installations have exactly the old behavior.
         try:
-            config = json.loads(Path(path).read_text())
+            data = json.loads(Path(path).read_text())
+            # Shared servo JSON is preferred; old mouth-only files still work.
+            config = data.get('mouth', data)
+            if 'mouth' in data and any(
+                    axis.get('pin') == config['pin']
+                    for name, axis in data.items() if name != 'mouth'):
+                raise ValueError('Mouth pin conflicts with another servo')
             pin = config['pin']
             values = [config[k] for k in ('min_deg', 'closed_deg', 'open_deg', 'max_deg')]
-            if (not isinstance(pin, int) or isinstance(pin, bool) or not 2 <= pin <= 13
+            if (not isinstance(pin, int) or isinstance(pin, bool) or not 2 <= pin <= 13 or pin in (6, 7)
                     or not all(math.isfinite(v) and int(v) == v for v in values)):
                 raise ValueError('Use pin 2..13 and finite integer degree values')
             lo, closed, opened, hi = values
@@ -49,8 +55,8 @@ class MouthAnimator:
             log.warning('Mouth animation disabled: %s', exc)
             return None
 
-    def start(self):
-        """Called immediately before the first PCM write. Failures never stop audio."""
+    def prepare(self):
+        """Configure and close the mouth without starting speech motion."""
         try:
             self.stop()
             if self.link is None or not self.link.is_open():
@@ -71,6 +77,18 @@ class MouthAnimator:
             # errors still fail, and an old sketch times out without MOUTH_READY.
             wait_for_reply(self.link._serial, 'MOUTH_READY', timeout=1,
                            ignored_replies=('ERROR command',))
+            self.link.send_line('TALK,0')
+            return True
+        except Exception as exc:
+            log.warning('Mouth animation unavailable; continuing speech: %s', exc)
+            self.close()
+            return False
+
+    def start(self):
+        """Called immediately before the first PCM write. Failures never stop audio."""
+        if not self.prepare():
+            return
+        try:
             self.stop_event.clear()
             self.link.send_line('TALK,1')
             self.thread = threading.Thread(target=self._heartbeat, name='robot-mouth', daemon=True)
