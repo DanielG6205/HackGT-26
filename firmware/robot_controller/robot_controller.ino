@@ -3,15 +3,16 @@
 #include <stdlib.h>
 
 // USB: 115200, newline terminated ASCII. Physical angles, no firmware inversion.
-// CONFIG,eyes|neck|head,pin,min,center,max -> CONFIGURED,name
-// POSE,eyes,neck,head -> no per-frame reply (avoids serial backpressure).
+// CONFIG,eye_left|eye_right|neck|lift_left|lift_right,pin,min,center,max -> CONFIGURED,name
+// POSE,eye_left,eye_right,neck,lift_left,lift_right -> no per-frame reply (avoids serial backpressure).
 // Legacy servo_number,angle remains available before CONFIG (pins 10..4).
 Servo servos[7];
 const int legacyPins[7] = {10, 9, 8, 7, 6, 5, 4};
-const char *names[3] = {"eyes", "neck", "head"};
-float low[3], middle[3], high[3];
-int pins[3] = {-1, -1, -1};
-bool configured[3] = {false, false, false};
+const int AXIS_COUNT = 5;
+const char *names[AXIS_COUNT] = {"eye_left", "eye_right", "neck", "lift_left", "lift_right"};
+float low[AXIS_COUNT], middle[AXIS_COUNT], high[AXIS_COUNT];
+int pins[AXIS_COUNT] = {-1, -1, -1, -1, -1};
+bool configured[AXIS_COUNT] = {};
 bool gazeMode = false;
 char input[128];
 unsigned int used = 0;
@@ -34,16 +35,16 @@ void processCommand(char *line) {
   char *token = strtok(line, ",");
   while (token && count < 8) { parts[count++] = token; token = strtok(NULL, ","); }
   if (token) { Serial.println("ERROR length"); return; }
-  if (count == 1 && !strcmp(parts[0], "PING")) { Serial.println("GAZE_READY,1"); return; }
+  if (count == 1 && !strcmp(parts[0], "PING")) { Serial.println("GAZE_READY,2"); return; }
   if (count == 6 && !strcmp(parts[0], "CONFIG")) {
     int axis = -1;
-    for (int i=0; i<3; i++) if (!strcmp(parts[1], names[i])) axis=i;
+    for (int i=0; i<AXIS_COUNT; i++) if (!strcmp(parts[1], names[i])) axis=i;
     float pin, lo, center, hi;
     if (axis < 0 || !number(parts[2], pin) || !number(parts[3], lo) ||
         !number(parts[4], center) || !number(parts[5], hi) ||
         pin != floor(pin) || pin < 2 || pin > 13 || lo < 0 || hi > 180 ||
         lo > center || center > hi) { Serial.println("ERROR config"); return; }
-    for (int i=0; i<3; i++) if (i != axis && configured[i] && pins[i] == (int)pin) {
+    for (int i=0; i<AXIS_COUNT; i++) if (i != axis && configured[i] && pins[i] == (int)pin) {
       Serial.println("ERROR duplicate pin"); return;
     }
     if (!gazeMode) {
@@ -56,14 +57,14 @@ void processCommand(char *line) {
     // Delay attachment until the entire pose has passed validation.
     Serial.print("CONFIGURED,"); Serial.println(names[axis]); return;
   }
-  if (count == 4 && !strcmp(parts[0], "POSE")) {
-    float values[3];
-    for (int i=0; i<3; i++) {
+  if (count == AXIS_COUNT + 1 && !strcmp(parts[0], "POSE")) {
+    float values[AXIS_COUNT];
+    for (int i=0; i<AXIS_COUNT; i++) {
       if (!configured[i] || !number(parts[i+1], values[i]) || values[i]<low[i] || values[i]>high[i]) {
         Serial.println("ERROR pose"); return;
       }
     }
-    for (int i=0; i<3; i++) {
+    for (int i=0; i<AXIS_COUNT; i++) {
       // Servo.write truncates degrees. Use pulse conversion to retain fractions.
       int pulse = (int)round(544.0 + values[i]*(2400.0-544.0)/180.0);
       servos[i].writeMicroseconds(pulse);
@@ -87,7 +88,7 @@ void setup() {
   Serial.begin(115200);
   // Do not move unknown hardware on boot. CONFIG + POSE arms calibrated axes.
   Serial.println("READY");
-  Serial.println("GAZE_READY,1");
+  Serial.println("GAZE_READY,2");
 }
 
 void loop() {

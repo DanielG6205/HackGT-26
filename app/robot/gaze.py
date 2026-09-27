@@ -1,4 +1,4 @@
-"""Three-axis physical-angle calibration and deterministic gaze motion."""
+"""Five-servo physical-angle calibration and deterministic gaze motion."""
 import json
 import math
 import time
@@ -8,7 +8,9 @@ from pathlib import Path
 from .config import ServoAxisConfig
 from .mapping import step_toward
 
-AXES = ('eyes', 'neck', 'head')
+AXES = ('eye_left', 'eye_right', 'neck', 'lift_left', 'lift_right')
+EYES = ('eye_left', 'eye_right')
+LIFTS = ('lift_left', 'lift_right')
 LABELS = ('top-left', 'top-center', 'top-right', 'middle-left', 'center',
           'middle-right', 'bottom-left', 'bottom-center', 'bottom-right')
 
@@ -22,12 +24,14 @@ def finite(value):
 
 def load_axes(path):
     data = json.loads(Path(path).read_text())
+    if set(data) != set(AXES):
+        raise ValueError('Expected five servos: ' + ', '.join(AXES) + '; update the old three-axis config')
     axes = {name: ServoAxisConfig(**data[name]) for name in AXES}
     pins = [axis.pin for axis in axes.values()]
-    if len(set(pins)) != 3 or any(p not in range(2, 14) for p in pins):
-        raise ValueError('Use three distinct Uno digital pins 2..13')
+    if len(set(pins)) != len(AXES) or any(p not in range(2, 14) for p in pins):
+        raise ValueError('Use five distinct Uno digital pins 2..13')
     if any(not a.enabled or not 0 <= a.min_deg <= a.max_deg <= 180 for a in axes.values()):
-        raise ValueError('All three axes must be enabled with limits within 0..180')
+        raise ValueError('All five servos must be enabled with limits within 0..180')
     if any(math.ceil(a.min_deg*10000) > math.floor(a.max_deg*10000) for a in axes.values()):
         raise ValueError('Servo limits must allow a representable four-decimal angle')
     return axes
@@ -38,7 +42,7 @@ def save_points(path, axes, points):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + '.tmp')
-    temporary.write_text(json.dumps({'version': 1, 'axes': {k: asdict(v) for k, v in axes.items()},
+    temporary.write_text(json.dumps({'version': 2, 'axes': {k: asdict(v) for k, v in axes.items()},
                                      'points': points}, indent=2) + '\n')
     temporary.replace(path)
 
@@ -49,7 +53,7 @@ class GazeMap:
             raise ValueError('Complete all nine calibration positions first')
         self.points = []
         for p in points:
-            row = tuple(finite(p[k]) for k in ('camera_x', 'camera_y', 'neck_angle', 'head_pitch_angle'))
+            row = tuple(finite(p[k]) for k in ('camera_x', 'camera_y', 'neck_angle', 'lift_left_angle', 'lift_right_angle'))
             if not all(0 <= v <= 1 for v in row[:2]):
                 raise ValueError('Camera coordinates must be normalized')
             self.points.append(row)
@@ -64,7 +68,7 @@ class GazeMap:
     @classmethod
     def load(cls, path, axes):
         data = json.loads(Path(path).read_text())
-        if data.get('version') != 1 or data['axes'] != {k: asdict(v) for k, v in axes.items()}:
+        if data.get('version') != 2 or data['axes'] != {k: asdict(v) for k, v in axes.items()}:
             raise ValueError('Servo configuration changed; repeat world calibration')
         return cls(data['points'])
 
@@ -76,7 +80,7 @@ class GazeMap:
         if min(distances) < 1e-12:
             return self.points[distances.index(min(distances))][2:]
         weights = [1/d for d in distances]
-        return tuple(sum(w*p[i] for w, p in zip(weights, self.points))/sum(weights) for i in (2, 3))
+        return tuple(sum(w*p[i] for w, p in zip(weights, self.points))/sum(weights) for i in (2, 3, 4))
 
 
 class GazeController:
@@ -96,7 +100,7 @@ class GazeController:
         link = self.robot.transport
         if isinstance(link, SerialTransport):
             # Opening USB resets an Uno. Wait for this specific firmware first.
-            wait_for_reply(link._serial, 'GAZE_READY,1', timeout=6)
+            wait_for_reply(link._serial, 'GAZE_READY,2', timeout=6)
         for name, axis in self.axes.items():
             command = f'CONFIG,{name},{axis.pin},{axis.min_deg:.4f},{axis.center_deg:.4f},{axis.max_deg:.4f}'
             link.send_line(command)
@@ -123,6 +127,21 @@ class GazeController:
     def jog(self, axis, delta):
         return self.set_pose(**{axis: self.pose[axis] + delta * (-1 if self.axes[axis].invert else 1)})
 
+    def jog_pair(self, names, delta, differential=False):
+        """Preserve paired movement at limits: stop both when either hits its bound."""
+        changes = {}
+        scale = 1.0
+        for index, name in enumerate(names):
+            axis = self.axes[name]
+            change = finite(delta) * (-1 if axis.invert else 1)
+            if differential and index == 1:
+                change = -change
+            changes[name] = change
+            if change:
+                room = (axis.max_deg-self.pose[name]) if change > 0 else (self.pose[name]-axis.min_deg)
+                scale = min(scale, max(0., room/abs(change)))
+        return self.set_pose(**{name: self.pose[name]+change*scale for name, change in changes.items()})
+
     def hold(self):
         self.target = None
         self.last = self.clock()
@@ -140,21 +159,21 @@ class GazeController:
             if self.target is None or math.dist(point, self.target) > .15:
                 self.follow_after = now + .12
             self.target = point
-        neck, head = self.calibration.map(*self.target)
+        neck, left, right = self.calibration.map(*self.target)
         neck = max(self.axes['neck'].min_deg, min(self.axes['neck'].max_deg, neck))
-        head = max(self.axes['head'].min_deg, min(self.axes['head'].max_deg, head))
         residual = (neck-self.pose['neck']) * (-1 if self.axes['neck'].invert else 1)
-        eye = self.axes['eyes'].center_deg + .7*residual * (-1 if self.axes['eyes'].invert else 1)
-        desired = {'eyes': eye, 'neck': neck, 'head': head}
+        desired = {'neck': neck, 'lift_left': left, 'lift_right': right}
+        for name in EYES:
+            desired[name] = self.axes[name].center_deg + .7*residual * (-1 if self.axes[name].invert else 1)
         angles = {}
         for name, goal in desired.items():
             axis = self.axes[name]
             goal = max(axis.min_deg, min(axis.max_deg, goal))
             current = self.pose[name]
-            if name != 'eyes' and now < self.follow_after:
+            if name not in EYES and now < self.follow_after:
                 continue
             if abs(goal-current) < .1:
                 continue
-            smooth = current + (goal-current)*(1-math.exp(-dt/(.06 if name == 'eyes' else .18)))
-            angles[name] = step_toward(current, smooth, (100 if name == 'eyes' else 30)*dt)
+            smooth = current + (goal-current)*(1-math.exp(-dt/(.06 if name in EYES else .18)))
+            angles[name] = step_toward(current, smooth, (100 if name in EYES else 30)*dt)
         return self.set_pose(**angles)

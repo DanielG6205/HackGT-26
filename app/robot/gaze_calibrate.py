@@ -3,12 +3,16 @@ import argparse
 
 from .factory import connect_robot
 from .config import RobotHardwareConfig
-from .gaze import GazeController, GazeMap, LABELS, load_axes, save_points
+from .gaze import GazeController, GazeMap, LABELS, EYES, LIFTS, load_axes, save_points
 
 # Lowercase = 1 degree; uppercase = 5 degrees. Inversion sets jog direction.
-JOG = {'a': ('eyes', -1), 'd': ('eyes', 1), 'j': ('neck', -1),
-       'l': ('neck', 1), 'i': ('head', -1), 'k': ('head', 1)}
-HELP = 'a/d eyes | j/l neck | i/k head | lowercase 1deg, uppercase 5deg | c center | q quit'
+JOG = {'a': ('eye_left', -1), 'd': ('eye_left', 1),
+       'f': ('eye_right', -1), 'h': ('eye_right', 1),
+       'j': ('neck', -1), 'l': ('neck', 1),
+       'r': ('lift_left', -1), 'v': ('lift_left', 1),
+       't': ('lift_right', -1), 'b': ('lift_right', 1)}
+HELP = 'a/d eye L, f/h eye R | j/l neck | r/v lift L, t/b lift R'
+PAIR_HELP = 'i/k pitch | u/o tilt | z/x both eyes | Shift=5deg | c center | q quit'
 
 
 def state(controller):
@@ -18,14 +22,21 @@ def state(controller):
 def jog(controller, key, world=False):
     if key == 'c':
         controller.center()
+    elif key.lower() in 'ikuozx' and len(key) == 1:
+        lower = key.lower()
+        if world and lower in 'zx':
+            return
+        sign = -1 if lower in 'iuz' else 1
+        controller.jog_pair(EYES if lower in 'zx' else LIFTS,
+                            sign*(5 if key.isupper() else 1), differential=lower in 'uo')
     elif key.lower() in JOG:
         axis, sign = JOG[key.lower()]
-        if not world or axis != 'eyes':
+        if not world or axis not in EYES:
             controller.jog(axis, sign*(5 if key.isupper() else 1))
 
 
 def servo_limits(controller):
-    print(HELP + '\nType a key then Enter. Edit your servo JSON after measuring safe limits.')
+    print(HELP + '\n' + PAIR_HELP + '\nType a key then Enter. Edit your servo JSON after measuring safe limits.')
     while True:
         print(state(controller))
         try:
@@ -63,7 +74,7 @@ def camera_mode(controller, args):
     tracker = ObjectTracker(model=args.model, device=args.device)
     points = []
     message = 'Place one blue bottle; Enter saves current detection and commanded pose.'
-    print(HELP + '\nFocus the camera window for keys. Eyes stay centered in world mode.')
+    print(HELP + '\n' + PAIR_HELP + '\nFocus the camera window for keys. Eyes stay centered in world mode.')
     try:
         with Camera(index=args.camera) as camera:
             while True:
@@ -78,10 +89,12 @@ def camera_mode(controller, args):
                     x1, y1, x2, y2 = map(int, target.bbox)
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 2)
                 label = LABELS[len(points)] if args.mode == 'world' else 'tracking'
-                lines = (label + ' | ' + state(controller),
+                lines = (label,
+                         '  '.join(f'{k}={controller.pose[k]:.2f}' for k in EYES),
+                         '  '.join(f'{k}={controller.pose[k]:.2f}' for k in ('neck', *LIFTS)),
                          'Bottle: ' + (str(tuple(round(v, 3) for v in target.center_normalized))
                                        if target else 'missing/ambiguous; cannot save'),
-                         message, HELP)
+                         message, HELP, PAIR_HELP)
                 for row, text in enumerate(lines):
                     cv2.putText(frame, text, (8, 22+24*row), cv2.FONT_HERSHEY_SIMPLEX, .42, (0, 255, 255), 1)
                 cv2.imshow('Robot gaze (unmirrored)', frame)
@@ -96,7 +109,9 @@ def camera_mode(controller, args):
                             message = 'Too close to another sample; move bottle farther.'
                             continue
                         point = dict(label=label, camera_x=x, camera_y=y,
-                                     neck_angle=controller.pose['neck'], head_pitch_angle=controller.pose['head'])
+                                     neck_angle=controller.pose['neck'],
+                                     lift_left_angle=controller.pose['lift_left'],
+                                     lift_right_angle=controller.pose['lift_right'])
                         proposed = points + [point]
                         if len(proposed) == 9:
                             try:

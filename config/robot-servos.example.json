@@ -1,5 +1,37 @@
 {
-  "eyes": {"pin": 10, "min_deg": 85, "center_deg": 90, "max_deg": 95, "invert": false},
-  "neck": {"pin": 9, "min_deg": 85, "center_deg": 90, "max_deg": 95, "invert": false},
-  "head": {"pin": 8, "min_deg": 85, "center_deg": 90, "max_deg": 95, "invert": false}
+  "eye_left": {
+    "pin": 10,
+    "min_deg": 85,
+    "center_deg": 90,
+    "max_deg": 95,
+    "invert": false
+  },
+  "eye_right": {
+    "pin": 7,
+    "min_deg": 85,
+    "center_deg": 90,
+    "max_deg": 95,
+    "invert": false
+  },
+  "neck": {
+    "pin": 9,
+    "min_deg": 85,
+    "center_deg": 90,
+    "max_deg": 95,
+    "invert": false
+  },
+  "lift_left": {
+    "pin": 8,
+    "min_deg": 85,
+    "center_deg": 90,
+    "max_deg": 95,
+    "invert": false
+  },
+  "lift_right": {
+    "pin": 6,
+    "min_deg": 85,
+    "center_deg": 90,
+    "max_deg": 95,
+    "invert": false
+  }
 }
