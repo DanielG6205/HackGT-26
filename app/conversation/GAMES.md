@@ -45,3 +45,11 @@ crosshair, with its tracking ID, confidence, and pixel center displayed. Empty
 frames cannot select an object. If the selected tracking ID disappears, aiming
 holds rather than switching to a different object. YOLO labels remain estimates:
 a persistent wrong label can still occur, so check the box against the real scene.
+
+
+If the child has not looked near the object after eight seconds of available
+face/target observations, the configured AI provider (Grok by default) supplies a
+short encouraging hint. Further hints wait 12 seconds after speech, up to three
+per round. Missing face/target observations pause the hint timer. AI only chooses
+encouragement; visual iris/head matching still decides success. API failure uses
+a gentle built-in hint and does not end the game.

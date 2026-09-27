@@ -215,6 +215,40 @@ class SessionTests(unittest.TestCase):
         self.session.brain.respond.return_value = 'What color is the cup?'
         self.assertEqual(self.session.ask_about_object('book'), 'What do you use a book for?')
 
+    def test_support_hint_waits_for_child_and_does_not_award_success(self):
+        self.session.object_game = True
+        self.session.active = True
+        self.session.target = obj()
+        self.session.enter('LOOK')
+        self.session.brain.respond.return_value = 'Take your time and follow my gaze toward the phone.'
+        self.frame('CENTER')
+        for _ in range(7):
+            self.frame('CENTER', advance=1000)
+        self.assertEqual(self.messages, [])
+        self.frame('CENTER', advance=1000)
+        self.assertIn('follow my gaze', self.messages[-1])
+        self.assertEqual(self.session.phase, 'LOOK')
+        self.assertEqual(self.session.support_count, 1)
+        self.frame('CENTER', busy=True, advance=20000)
+        self.assertEqual(len(self.messages), 1)
+        self.frame('CENTER')
+        self.frame('CENTER', advance=11000)
+        self.assertEqual(len(self.messages), 1)
+        self.frame('CENTER', advance=1000)
+        self.assertEqual(len(self.messages), 2)
+
+    def test_support_does_not_prompt_for_missing_target_or_after_round(self):
+        self.session.object_game = True
+        self.session.active = True
+        self.session.target = obj()
+        self.session.enter('LOOK')
+        self.frame('CENTER')
+        self.frame('CENTER', objects=[], advance=10000)
+        self.assertEqual(self.messages, [])
+        self.session.enter('BACK')
+        self.assertEqual(self.session.support_looking('phone', 1, 1), '')
+        self.session.brain.respond.assert_not_called()
+
     def test_only_prompts_attention_when_observed_off_center(self):
         self.start()
         self.frame(None)
