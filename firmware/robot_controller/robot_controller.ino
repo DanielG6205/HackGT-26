@@ -218,10 +218,10 @@ bool mouthTalking = false;
 
 uint8_t mouthPin = 0;  // Unassigned until MOUTH_CONFIG succeeds.
 
-float mouthMinDeg = 110;
+float mouthMinDeg = 60;
 float mouthClosedDeg = 110;
 float mouthOpenDeg = 60;
-float mouthMaxDeg = 60;
+float mouthMaxDeg = 110;
 
 unsigned long lastTalkMillis = 0;
 unsigned long lastMouthAnimationMillis = 0;
@@ -1084,6 +1084,11 @@ void processMouthConfig(char* command) {
   );
 
 
+  if (!mouth.attached()) {
+    mouthConfigured = false;
+    Serial.println("ERROR mouth attach failed");
+    return;
+  }
   mouthConfigured = true;
 
   mouthTalking = false;
@@ -1233,6 +1238,10 @@ void processTalk(char* command) {
   if (enabled == 1) {
 
     if (!mouthTalking) {
+      // Move immediately, even for short utterances. Heartbeats must not
+      // reset the phase, otherwise the servo can remain stuck in one pose.
+      mouth.write((int)round(constrain(mouthOpenDeg, mouthMinDeg, mouthMaxDeg)));
+      mouthIsOpen = true;
       lastMouthAnimationMillis = millis();
     }
     mouthTalking = true;
